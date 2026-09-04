@@ -11,12 +11,12 @@ echo.
 cd /d "%~dp0"
 
 git add .
-git commit -m "Har bir test uchun alohida Excel hisoboti, jonli reyting va maxsus havolalar yangilandi"
-git push origin main || git push origin master
+git commit -m "Test bot yangilanishi"
+git push origin main
 
 echo.
 echo ======================================================
-echo    Agar 'Muvaffaqiyatli' yozuvi chiqqan bo'lsa, Render
-echo    avtomatik ravishda yangilanadi (1-2 daqiqa kuting)!
+echo    Muvaffaqiyatli yuklandi!
+echo    Render.com avtomatik ravishda yangilanmoqda (1-2 daqiqa).
 echo ======================================================
 pause
