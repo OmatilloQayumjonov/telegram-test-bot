@@ -10,7 +10,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8970837149:AAGb7EhM3tkWz1SRP2PjNV8Hwc0rNHQAJ
 ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "1184083915").strip()
 
 # Adminlar ID ro'yxati (int formatda)
-ADMIN_IDS = [1184083915]
+ADMIN_IDS = [1184083915, 1400838424]
 if ADMIN_IDS_RAW:
     for item in ADMIN_IDS_RAW.split(","):
         item = item.strip()
