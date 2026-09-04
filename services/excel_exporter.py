@@ -84,7 +84,8 @@ def export_results_to_excel(results: list, test_title: str = None, output_filena
                 grade = "Qoniqarsiz (2)"
 
             medal = "🥇 " if i == 1 else "🥈 " if i == 2 else "🥉 " if i == 3 else ""
-            full_name = f"{medal}{r.get('full_name', 'Noma\\'lum')}"
+            student_name = r.get("full_name") or "Noma'lum"
+            full_name = f"{medal}{student_name}"
             username = f"@{r['username']}" if r.get("username") else "-"
 
             row_data = [
