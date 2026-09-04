@@ -1,0 +1,10 @@
+{
+  "name": "telegram-test-bot",
+  "version": "1.0.0",
+  "description": "Telegram Test Bot",
+  "scripts": {
+    "build": "pip install -r requirements.txt || python3 -m pip install -r requirements.txt",
+    "postinstall": "pip install -r requirements.txt || python3 -m pip install -r requirements.txt",
+    "start": "python main.py"
+  }
+}

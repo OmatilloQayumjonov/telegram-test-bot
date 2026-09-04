@@ -1,0 +1,22 @@
+# Muhit sozlamalari va maxfiy kalitlar
+.env
+*.env
+
+# Python kesh fayllari
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ma'lumotlar bazasi fayli
+data/*.db
+data/bot.db
+
+# Virtual muhit
+venv/
+.venv/
+env/
+
+# Excel va vaqtinchalik test fayllari
+data/*.xlsx
+data/*.docx
+namuna.docx
