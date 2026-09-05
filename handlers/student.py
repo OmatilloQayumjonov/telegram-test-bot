@@ -1,6 +1,7 @@
 import asyncio
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from typing import Callable, Dict, Any, Awaitable
+from aiogram import Router, F, Bot, BaseMiddleware
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, TelegramObject
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -953,7 +954,7 @@ def build_question_keyboard(q_id: int, current_idx: int, total: int, chosen_opti
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
-async def render_and_send_question(chat_id: int, state: FSMContext, bot: Bot, is_new: bool = False):
+async def render_and_send_question(chat_id: int, state: FSMContext, bot: Bot, is_new: bool = False, notice: str = ""):
     data = await state.get_data()
     idx = data["current_index"]
     questions = data["questions"]
@@ -994,6 +995,8 @@ async def render_and_send_question(chat_id: int, state: FSMContext, bot: Bot, is
         f"<b>D)</b> {safe_d}"
         f"{selected_tag}"
     )
+    if notice:
+        text = f"{notice}\n\n{text}"
 
     kb = build_question_keyboard(
         q_id=q_id,
@@ -1006,6 +1009,12 @@ async def render_and_send_question(chat_id: int, state: FSMContext, bot: Bot, is
     msg_id = data.get("msg_id")
 
     if is_new or not msg_id:
+        if msg_id and is_new:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception:
+                pass
+
         sent = await bot.send_message(
             chat_id=chat_id,
             text=text,
@@ -1025,6 +1034,18 @@ async def render_and_send_question(chat_id: int, state: FSMContext, bot: Bot, is
             )
         except TelegramBadRequest:
             pass
+        except Exception:
+            try:
+                sent = await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=kb,
+                    protect_content=True,
+                    parse_mode="HTML"
+                )
+                await state.update_data(msg_id=sent.message_id)
+            except Exception:
+                pass
 
 
 @router.callback_query(TestSessionState.in_test, F.data.startswith("opt_"))
@@ -1228,6 +1249,16 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
 
     await state.clear()
 
+    reply_kb = get_admin_reply_keyboard() if (chat_id in ADMIN_IDS) else get_student_reply_keyboard()
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="📱 Test yakunlandi. Menyudan foydalanishingiz mumkin:",
+            reply_markup=reply_kb
+        )
+    except Exception:
+        pass
+
 
 @router.callback_query(F.data.startswith("review_"))
 async def cb_review_mistakes(callback: CallbackQuery, bot: Bot):
@@ -1275,3 +1306,55 @@ async def cb_review_mistakes(callback: CallbackQuery, bot: Bot):
         )
 
     await callback.answer()
+
+
+class InTestProtectionMiddleware(BaseMiddleware):
+    """
+    Talaba yoki o'qituvchi test topshirayotgan vaqtda (in_test yoki confirm_finish),
+    pastdagi doimiy menyu tugmalari (Reply Keyboard), /start yoki boshqa xabarlar
+    bosilganda testning to'xtab qolishini 100% oldini oluvchi himoya qatlami.
+    Test o'z holatida kelgan joyidan (savol raqami, javoblari va qolgan vaqti bilan)
+    benuqson davom etadi.
+    """
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        if isinstance(event, Message):
+            state: FSMContext = data.get("state")
+            if state:
+                curr_state = await state.get_state()
+                if curr_state in [TestSessionState.in_test.state, TestSessionState.confirm_finish.state]:
+                    session_data = await state.get_data()
+                    if session_data and "attempt_id" in session_data:
+                        deadline_ts = session_data.get("deadline_ts", 0)
+                        bot: Bot = data.get("bot")
+
+                        # Agar test vaqti tugagan bo'lsa
+                        if deadline_ts > 0 and time.time() >= deadline_ts:
+                            await auto_finish_test(event.chat.id, state, bot, reason="time_up")
+                            return
+
+                        # Agar tasdiqlashda bo'lsa, test holatiga qaytaramiz
+                        if curr_state == TestSessionState.confirm_finish.state:
+                            await state.set_state(TestSessionState.in_test)
+
+                        # Talaba bosgan tugma xabarini o'chiramiz
+                        try:
+                            await event.delete()
+                        except Exception:
+                            pass
+
+                        # Testni kelgan joyidan davom ettiramiz
+                        await render_and_send_question(
+                            chat_id=event.chat.id,
+                            state=state,
+                            bot=bot,
+                            is_new=True,
+                            notice="⚠️ <b>Test davom etmoqda!</b>\n<i>Testni yakunlamasdan boshqa bo'limlarga o'tib bo'lmaydi. Savollarni ishlashda davom eting:</i>"
+                        )
+                        return
+
+        return await handler(event, data)

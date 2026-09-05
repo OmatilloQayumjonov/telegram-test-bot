@@ -95,6 +95,9 @@ async def main():
     )
     dp = Dispatcher(storage=MemoryStorage())
 
+    # Test vaqtida pastki tugmalar bosilganda testni kelgan joyidan davom ettiruvchi himoya
+    dp.message.outer_middleware(student.InTestProtectionMiddleware())
+
     # Handler routerlarini ulash
     dp.include_router(admin.router)
     dp.include_router(student.router)

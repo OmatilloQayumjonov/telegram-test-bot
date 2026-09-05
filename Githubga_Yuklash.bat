@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Savollar va variantlarni aralashtirish (Random rejim) va xatolar tahlili toliq qoshildi"
+git commit -m "Test vaqtida pastki menyu tugmalari bosilsa ham testni kelgan joyidan davom ettirish himoyasi qoshildi"
 git push origin main
 
 echo.
