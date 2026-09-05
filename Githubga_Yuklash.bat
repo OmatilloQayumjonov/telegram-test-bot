@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "24/7 Keep-Alive self-ping va uzluksiz avto-qayta ulanish qoshildi"
+git commit -m "Savollar va variantlarni aralashtirish (Random rejim) va xatolar tahlili toliq qoshildi"
 git push origin main
 
 echo.

@@ -307,12 +307,19 @@ async def cb_test_detail(callback: CallbackQuery):
     test_link = f"https://t.me/{bot_username}?start=test_{test_id}"
     share_url = f"https://t.me/share/url?url={test_link}&text=" + urllib.parse.quote(f"'{test['title']}' testini ishlash uchun havola:")
 
+    is_rand = test.get("is_random", 1)
+    if is_rand is None:
+        is_rand = 1
+    rand_status_str = "🟢 Yoqilgan (Aralashadi)" if is_rand == 1 else "🔴 O'chirilgan (Asl holatda)"
+    rand_toggle_btn = "🔀 Random: O'chirish" if is_rand == 1 else "🔀 Random: Yoqish"
+
     safe_title = html.escape(test['title'])
     text = (
         f"📝 <b>Test tafsilotlari:</b>\n\n"
         f"📌 <b>Nomi:</b> {safe_title}\n"
         f"🔢 <b>Savollar soni:</b> {len(questions)} ta\n"
         f"⏱ <b>Ajratilgan vaqt:</b> {time_limit_str}\n"
+        f"🔀 <b>Random rejim:</b> {rand_status_str}\n"
         f"📊 <b>Topshirgan talabalar:</b> {len(results)} kishi\n"
         f"⚙️ <b>Holati:</b> {status_str}\n"
         f"📅 <b>Yaratilgan vaqt:</b> {test['created_at']}\n\n"
@@ -323,7 +330,10 @@ async def cb_test_detail(callback: CallbackQuery):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 Havolani guruhga ulashish (Share)", url=share_url)],
-        [InlineKeyboardButton(text="⏱ Vaqtni sozlash", callback_data=f"admin_time_{test_id}")],
+        [
+            InlineKeyboardButton(text="⏱ Vaqtni sozlash", callback_data=f"admin_time_{test_id}"),
+            InlineKeyboardButton(text=rand_toggle_btn, callback_data=f"admin_random_{test_id}")
+        ],
         [InlineKeyboardButton(text=toggle_text, callback_data=f"admin_toggle_{test_id}")],
         [InlineKeyboardButton(text="📊 Excel natijalar", callback_data=f"admin_export_test_{test_id}")],
         [InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"admin_delete_{test_id}")],
@@ -332,6 +342,16 @@ async def cb_test_detail(callback: CallbackQuery):
 
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_random_"))
+async def cb_toggle_random(callback: CallbackQuery):
+    test_id = int(callback.data.replace("admin_random_", ""))
+    new_val = await db.toggle_test_random(test_id)
+    status_text = "yoqildi (savollar va variantlar aralashadi)" if new_val == 1 else "o'chirildi (asl tartibda beriladi)"
+    await callback.answer(f"🔀 Random rejim {status_text}!", show_alert=True)
+    callback.data = f"admin_test_{test_id}"
+    await cb_test_detail(callback)
 
 
 @router.callback_query(F.data.startswith("admin_time_"))

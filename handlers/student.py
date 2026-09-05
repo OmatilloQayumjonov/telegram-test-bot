@@ -13,6 +13,7 @@ from datetime import datetime
 import time
 import html
 import urllib.parse
+import random
 
 router = Router()
 
@@ -62,6 +63,11 @@ async def show_test_welcome(message: Message, test: dict, user_id: int):
     time_limit_str = f"{t_limit} daqiqa" if t_limit > 0 else "Cheklovsiz"
 
     safe_title = html.escape(test['title'])
+    is_rand = test.get("is_random", 1)
+    if is_rand is None:
+        is_rand = 1
+    rand_info = "• Savollar va variantlar tartibi <b>tasodifiy (random)</b> aralashtirilgan.\n" if is_rand == 1 else ""
+
     text = (
         f"🎯 <b>Testga taklif etildingiz!</b>\n\n"
         f"📝 <b>Test:</b> {safe_title}\n"
@@ -69,6 +75,7 @@ async def show_test_welcome(message: Message, test: dict, user_id: int):
         f"⏱ <b>Ajratilgan vaqt:</b> {time_limit_str}\n\n"
         f"🔒 <b>Himoya va Qoidalar:</b>\n"
         f"• Savollardan nusxa ko'chirish va ulashish taqiqlanadi (Telegram himoyasi yoqilgan).\n"
+        f"{rand_info}"
         f"• Oldingi va keyingi savollarga bemalol qaytishingiz va javobni o'zgartirishingiz mumkin.\n"
         f"• Vaqt jonli aylanuvchi soat bilan ko'rsatiladi.\n\n"
         f"Testni boshlashga tayyormisiz?"
@@ -697,12 +704,18 @@ async def cb_confirm_start_test(callback: CallbackQuery, state: FSMContext):
     test_link = f"https://t.me/{bot_username}?start=test_{test_id}"
     share_url = f"https://t.me/share/url?url={test_link}&text=" + urllib.parse.quote(f"'{test['title']}' testini ishlash uchun havola:")
 
+    is_rand = test.get("is_random", 1)
+    if is_rand is None:
+        is_rand = 1
+
     # Agar ushbu testning muallifi bo'lsa (yoki superadmin) - unga maxsus havola va boshqaruv ko'rsatiladi
     if test["author_id"] == user_id or user_id in ADMIN_IDS:
+        rand_status = "🟢 Yoqilgan (Aralashadi)" if is_rand == 1 else "🔴 O'chirilgan (Asl tartib)"
         text = (
             f"📝 <b>Test:</b> {safe_title}\n"
             f"🔢 <b>Savollar soni:</b> {len(questions)} ta\n"
-            f"⏱ <b>Ajratilgan vaqt:</b> {time_limit_str}\n\n"
+            f"⏱ <b>Ajratilgan vaqt:</b> {time_limit_str}\n"
+            f"🔀 <b>Random rejim:</b> {rand_status}\n\n"
             f"🔗 <b>Talabalarga yuborish uchun maxsus havola:</b>\n"
             f"<code>{test_link}</code>\n\n"
             f"<i>💡 Talabalar aynan shu havola orqali kirib testni ishlay oladilar. Ushbu havolani nusxalab talabalaringizga yuboring yoki quyidagi ulashish tugmasini bosing:</i>"
@@ -711,11 +724,15 @@ async def cb_confirm_start_test(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="📤 Havolani guruhga ulashish (Share)", url=share_url)],
             [InlineKeyboardButton(text="🚀 O'zim sinab ko'rish", callback_data=f"launch_test_{test_id}")],
             [InlineKeyboardButton(text="📊 Excel hisobot va Reyting", callback_data=f"test_report_{test_id}")],
-            [InlineKeyboardButton(text="⏱ Vaqtni sozlash", callback_data=f"admin_time_{test_id}")],
+            [
+                InlineKeyboardButton(text="⏱ Vaqtni sozlash", callback_data=f"admin_time_{test_id}"),
+                InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data=f"admin_test_{test_id}")
+            ],
             [InlineKeyboardButton(text="🔙 Orqaga", callback_data="student_menu")]
         ])
     else:
         # Oddiy talaba uchun testni boshlash oynasi
+        rand_info = "• Savollar va variantlar tartibi <b>tasodifiy (random)</b> aralashtirilgan.\n" if is_rand == 1 else ""
         text = (
             f"📝 <b>Test:</b> {safe_title}\n"
             f"🔢 <b>Savollar soni:</b> {len(questions)} ta\n"
@@ -723,6 +740,7 @@ async def cb_confirm_start_test(callback: CallbackQuery, state: FSMContext):
             f"🔒 <b>Qoidalar va Himoya:</b>\n"
             f"• Savollarni birovga yo'naltirish (forward) va nusxalash taqiqlanadi.\n"
             f"• Skrinshot olish cheklangan.\n"
+            f"{rand_info}"
             f"• Test davomida <b>oldingi va keyingi savollarga qaytishingiz</b> va javoblaringizni o'zgartirishingiz mumkin.\n"
             f"• Vaqt <b>aylanuvchi soat bilan jonli ravishda</b> hisoblab boriladi.\n\n"
             f"Boshlashga tayyormisiz?"
@@ -761,7 +779,44 @@ async def cb_launch_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer("Savollar topilmadi", show_alert=True)
         return
 
-    attempt_id = await db.create_attempt(user_id=user_id, test_id=test_id, total=len(questions))
+    is_random = test.get("is_random", 1) if test else 1
+    if is_random is None:
+        is_random = 1
+
+    processed_questions = []
+    for q in questions:
+        q_copy = dict(q)
+        orig_corr = (q_copy.get("correct_option") or "A").strip().upper()
+        corr_key = f"option_{orig_corr.lower()}"
+        corr_text = q_copy.get(corr_key, q_copy.get("option_a", ""))
+
+        if is_random == 1:
+            opts = [
+                (q_copy["option_a"], orig_corr == "A"),
+                (q_copy["option_b"], orig_corr == "B"),
+                (q_copy["option_c"], orig_corr == "C"),
+                (q_copy["option_d"], orig_corr == "D"),
+            ]
+            random.shuffle(opts)
+            letters = ["A", "B", "C", "D"]
+            new_corr_letter = "A"
+            for opt_idx, (opt_text, is_c) in enumerate(opts):
+                letter = letters[opt_idx]
+                q_copy[f"option_{letter.lower()}"] = opt_text
+                if is_c:
+                    new_corr_letter = letter
+
+            q_copy["correct_option"] = new_corr_letter
+            q_copy["correct_text"] = corr_text
+        else:
+            q_copy["correct_text"] = corr_text
+
+        processed_questions.append(q_copy)
+
+    if is_random == 1:
+        random.shuffle(processed_questions)
+
+    attempt_id = await db.create_attempt(user_id=user_id, test_id=test_id, total=len(processed_questions))
 
     time_limit_minutes = test.get("time_limit_minutes", 15) or 15
     start_ts = time.time()
@@ -773,9 +828,9 @@ async def cb_launch_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
         test_title=test["title"],
         author_id=test.get("author_id", 0),
         attempt_id=attempt_id,
-        questions=questions,
+        questions=processed_questions,
         current_index=0,
-        total=len(questions),
+        total=len(processed_questions),
         answers={},
         time_limit_minutes=time_limit_minutes,
         deadline_ts=deadline_ts,
@@ -1193,11 +1248,22 @@ async def cb_review_mistakes(callback: CallbackQuery, bot: Bot):
         safe_q = html.escape(m['question_text'])
         exp = f"\n💡 <b>Izoh:</b> {html.escape(m['explanation'])}" if m.get("explanation") else ""
 
+        sel_opt = m.get('selected_option', 'Belgilanmagan')
+        sel_txt = m.get('selected_text') or ''
+        corr_txt = m.get('correct_text') or ''
+
+        if sel_opt != 'Belgilanmagan' and sel_txt and sel_txt != 'Javob berilmagan':
+            sel_display = f"❌ <b>{sel_opt}) {html.escape(sel_txt)}</b>"
+        else:
+            sel_display = "❌ <b>Belgilanmagan</b>"
+
+        corr_display = f"✅ <b>{html.escape(corr_txt)}</b>"
+
         q_text = (
             f"❌ <b>{i}-xato savol:</b>\n"
             f"{safe_q}\n\n"
-            f"Sizning javobingiz: ❌ <b>{m['selected_option']}</b>\n"
-            f"To'g'ri javob: ✅ <b>{m['correct_option']}</b>"
+            f"Sizning javobingiz: {sel_display}\n"
+            f"To'g'ri javob: {corr_display}"
             f"{exp}"
         )
 

@@ -68,6 +68,11 @@ async def init_db():
         except Exception:
             pass
 
+        try:
+            await db.execute("ALTER TABLE tests ADD COLUMN is_random INTEGER DEFAULT 1")
+        except Exception:
+            pass
+
         # Savollar
         await db.execute("""
             CREATE TABLE IF NOT EXISTS questions (
@@ -107,10 +112,22 @@ async def init_db():
                 question_id INTEGER NOT NULL,
                 selected_option TEXT NOT NULL,
                 is_correct INTEGER NOT NULL,
+                selected_text TEXT,
+                correct_text TEXT,
                 FOREIGN KEY (attempt_id) REFERENCES attempts (id) ON DELETE CASCADE,
                 FOREIGN KEY (question_id) REFERENCES questions (id) ON DELETE CASCADE
             )
         """)
+
+        try:
+            await db.execute("ALTER TABLE attempt_answers ADD COLUMN selected_text TEXT")
+        except Exception:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE attempt_answers ADD COLUMN correct_text TEXT")
+        except Exception:
+            pass
 
         # To'lovlar (obuna so'rovlari)
         await db.execute("""
@@ -298,11 +315,11 @@ async def update_payment_status(payment_id: int, status: str):
 
 
 # Test boshqaruvi funksiyalari
-async def add_test(title: str, author_id: int, questions: list, time_limit_minutes: int = 15) -> int:
+async def add_test(title: str, author_id: int, questions: list, time_limit_minutes: int = 15, is_random: int = 1) -> int:
     async with get_db() as db:
         cursor = await db.execute(
-            "INSERT INTO tests (title, author_id, is_active, time_limit_minutes) VALUES (?, ?, 1, ?)",
-            (title, author_id, time_limit_minutes)
+            "INSERT INTO tests (title, author_id, is_active, time_limit_minutes, is_random) VALUES (?, ?, 1, ?, ?)",
+            (title, author_id, time_limit_minutes, is_random)
         )
         test_id = cursor.lastrowid
 
@@ -331,6 +348,20 @@ async def update_test_time_limit(test_id: int, minutes: int):
     async with get_db() as db:
         await db.execute("UPDATE tests SET time_limit_minutes = ? WHERE id = ?", (minutes, test_id))
         await db.commit()
+
+
+async def toggle_test_random(test_id: int) -> int:
+    """Test uchun savol va variantlarni aralashtirish (Random) rejimini yoqish/o'chirish"""
+    async with get_db() as db:
+        cursor = await db.execute("SELECT is_random FROM tests WHERE id = ?", (test_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return 1
+        curr = row["is_random"] if (row["is_random"] is not None) else 1
+        new_val = 0 if curr == 1 else 1
+        await db.execute("UPDATE tests SET is_random = ? WHERE id = ?", (new_val, test_id))
+        await db.commit()
+        return new_val
 
 
 async def grant_student_access_to_test(user_id: int, test_id: int):
@@ -498,11 +529,18 @@ async def save_attempt_final_answers(attempt_id: int, questions: list, answers_d
             if is_correct:
                 score += 1
 
+            correct_text = q.get("correct_text") or q.get(f"option_{q['correct_option'].lower()}", "")
             if chosen:
+                selected_text = q.get(f"option_{chosen.lower()}", "")
                 await db.execute("""
-                    INSERT INTO attempt_answers (attempt_id, question_id, selected_option, is_correct)
-                    VALUES (?, ?, ?, ?)
-                """, (attempt_id, q_id, chosen.upper(), is_correct))
+                    INSERT INTO attempt_answers (attempt_id, question_id, selected_option, is_correct, selected_text, correct_text)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (attempt_id, q_id, chosen.upper(), is_correct, selected_text, correct_text))
+            else:
+                await db.execute("""
+                    INSERT INTO attempt_answers (attempt_id, question_id, selected_option, is_correct, selected_text, correct_text)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (attempt_id, q_id, "Belgilanmagan", 0, "Javob berilmagan", correct_text))
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         await db.execute(
@@ -529,14 +567,23 @@ async def finish_attempt(attempt_id: int):
 async def get_attempt_mistakes(attempt_id: int):
     async with get_db() as db:
         cursor = await db.execute("""
-            SELECT q.question_text, q.correct_option, q.explanation,
-                   q.option_a, q.option_b, q.option_c, q.option_d,
-                   COALESCE(ans.selected_option, 'Belgilanmagan') as selected_option
+            SELECT q.question_text, q.explanation,
+                   COALESCE(ans.selected_option, 'Belgilanmagan') as selected_option,
+                   COALESCE(ans.selected_text, 'Javob berilmagan') as selected_text,
+                   COALESCE(ans.correct_text, 
+                       CASE q.correct_option 
+                           WHEN 'A' THEN q.option_a 
+                           WHEN 'B' THEN q.option_b 
+                           WHEN 'C' THEN q.option_c 
+                           WHEN 'D' THEN q.option_d 
+                           ELSE q.option_a 
+                       END
+                   ) as correct_text
             FROM questions q
             JOIN attempts a ON a.id = ? AND q.test_id = a.test_id
             LEFT JOIN attempt_answers ans ON ans.attempt_id = a.id AND ans.question_id = q.id
             WHERE ans.is_correct IS NULL OR ans.is_correct = 0
-            ORDER BY q.id ASC
+            ORDER BY ans.id ASC, q.id ASC
         """, (attempt_id,))
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
