@@ -10,8 +10,8 @@ echo.
 
 cd /d "%~dp0"
 
-git add .
-git commit -m "Test bot yangilanishi"
+git add -A
+git commit -m "24/7 Keep-Alive self-ping va uzluksiz avto-qayta ulanish qoshildi"
 git push origin main
 
 echo.
