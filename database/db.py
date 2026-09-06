@@ -22,9 +22,15 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY,
                 full_name TEXT NOT NULL,
                 username TEXT,
+                phone_number TEXT,
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN phone_number TEXT")
+        except Exception:
+            pass
 
         # O'qituvchilar va ularning obuna holati
         await db.execute("""
@@ -119,6 +125,11 @@ async def init_db():
         except Exception:
             pass
 
+        try:
+            await db.execute("ALTER TABLE attempts ADD COLUMN last_msg_id INTEGER")
+        except Exception:
+            pass
+
         # Berilgan javoblar
         await db.execute("""
             CREATE TABLE IF NOT EXISTS attempt_answers (
@@ -173,17 +184,24 @@ async def init_db():
 
 
 # Foydalanuvchi funksiyalari
-async def save_or_update_user(user_id: int, full_name: str, username: str = None):
+async def save_or_update_user(user_id: int, full_name: str, username: str = None, phone_number: str = None):
     async with get_db() as db:
         await db.execute("""
-            INSERT INTO users (user_id, full_name, username)
-            VALUES (?, ?, ?)
+            INSERT INTO users (user_id, full_name, username, phone_number)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 full_name = excluded.full_name,
-                username = excluded.username
-        """, (user_id, full_name, username))
+                username = excluded.username,
+                phone_number = COALESCE(excluded.phone_number, users.phone_number)
+        """, (user_id, full_name, username, phone_number))
         if full_name and full_name != "Foydalanuvchi":
             await db.execute("UPDATE attempts SET student_name = ? WHERE user_id = ?", (full_name, user_id))
+        await db.commit()
+
+
+async def update_user_phone(user_id: int, phone_number: str):
+    async with get_db() as db:
+        await db.execute("UPDATE users SET phone_number = ? WHERE user_id = ?", (phone_number, user_id))
         await db.commit()
 
 
@@ -539,11 +557,11 @@ async def get_test_questions(test_id: int):
 
 
 # Test urinishlari (Attempts)
-async def create_attempt(user_id: int, test_id: int, total: int, student_name: str = None) -> int:
+async def create_attempt(user_id: int, test_id: int, total: int, student_name: str = None, last_msg_id: int = None) -> int:
     async with get_db() as db:
         cursor = await db.execute(
-            "INSERT INTO attempts (user_id, test_id, total, score, student_name) VALUES (?, ?, ?, 0, ?)",
-            (user_id, test_id, total, student_name)
+            "INSERT INTO attempts (user_id, test_id, total, score, student_name, last_msg_id) VALUES (?, ?, ?, 0, ?, ?)",
+            (user_id, test_id, total, student_name, last_msg_id)
         )
         attempt_id = cursor.lastrowid
         await db.commit()
@@ -625,7 +643,8 @@ async def get_attempt_mistakes(attempt_id: int):
 async def get_all_test_results(test_id: int = None, author_id: int = None):
     async with get_db() as db:
         query = """
-            SELECT a.id, a.user_id, COALESCE(u.full_name, a.student_name) as full_name, u.username, t.title as test_title,
+            SELECT a.id, a.user_id, COALESCE(u.full_name, a.student_name) as full_name, 
+                   u.username, u.phone_number, a.last_msg_id, t.title as test_title,
                    a.score, a.total, a.started_at, a.completed_at
             FROM attempts a
             LEFT JOIN users u ON a.user_id = u.user_id
@@ -700,7 +719,8 @@ async def get_test_results_summary(test_id: int, author_id: int = None):
             return None, []
 
         cursor = await db.execute("""
-            SELECT a.id, a.user_id, COALESCE(u.full_name, a.student_name) as full_name, u.username, t.title as test_title,
+            SELECT a.id, a.user_id, COALESCE(u.full_name, a.student_name) as full_name, 
+                   u.username, u.phone_number, a.last_msg_id, t.title as test_title,
                    a.score, a.total, a.started_at, a.completed_at
             FROM attempts a
             LEFT JOIN users u ON a.user_id = u.user_id

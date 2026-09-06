@@ -2,7 +2,10 @@ import asyncio
 import os
 from typing import Callable, Dict, Any, Awaitable
 from aiogram import Router, F, Bot, BaseMiddleware
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, TelegramObject, FSInputFile
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    TelegramObject, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -35,6 +38,10 @@ def stop_timer(chat_id: int):
 class StudentRegistrationState(StatesGroup):
     waiting_for_name = State()
     editing_name = State()
+
+
+class StudentReplyState(StatesGroup):
+    waiting_for_reply = State()
 
 
 class TeacherPaymentState(StatesGroup):
@@ -231,6 +238,91 @@ async def process_name(message: Message, state: FSMContext):
             return
 
     await show_main_menu(message, full_name, message.from_user.id)
+
+
+@router.callback_query(F.data.startswith("reply_teacher_"))
+async def cb_start_reply_to_teacher(callback: CallbackQuery, state: FSMContext):
+    teacher_id = int(callback.data.replace("reply_teacher_", ""))
+    await state.set_state(StudentReplyState.waiting_for_reply)
+    await state.update_data(target_teacher_id=teacher_id)
+
+    kb_cancel = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_student_reply")]
+    ])
+    await callback.message.answer(
+        "✍️ <b>O'qituvchingizga yubormoqchi bo'lgan javobingizni yozing:</b>\n"
+        "<i>(Matn, rasm yoki audio yuborishingiz mumkin)</i>",
+        reply_markup=kb_cancel,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_student_reply")
+async def cb_cancel_student_reply(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Javob yozish bekor qilindi.")
+    await callback.answer()
+
+
+@router.message(StudentReplyState.waiting_for_reply)
+async def process_student_reply_to_teacher(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    teacher_id = data.get("target_teacher_id")
+    await state.clear()
+
+    if not teacher_id:
+        await message.answer("⚠️ O'qituvchi topilmadi.")
+        return
+
+    user = await db.get_user(message.from_user.id)
+    st_name = html.escape(user.get("full_name") if user else (message.from_user.full_name or "Talaba"))
+    st_uname = message.from_user.username
+    if st_uname:
+        profile_link = f'<a href="https://t.me/{st_uname}"><b>{st_name}</b></a> (@{st_uname})'
+    else:
+        profile_link = f'<a href="tg://user?id={message.from_user.id}"><b>{st_name}</b></a>'
+
+    teacher_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✉️ Yana javob yozish", callback_data=f"msg_student_{message.from_user.id}_0")]
+    ])
+
+    header_text = (
+        f"📩 <b>Talabadan yangi javob xabari!</b>\n\n"
+        f"👤 <b>Talaba:</b> {profile_link}\n"
+        f"🆔 <b>ID:</b> <code>{message.from_user.id}</code>\n\n"
+        f"💬 <b>Javob:</b>\n"
+    )
+
+    try:
+        if message.text:
+            await bot.send_message(
+                chat_id=teacher_id,
+                text=header_text + message.text,
+                reply_markup=teacher_kb,
+                parse_mode="HTML"
+            )
+        else:
+            await bot.send_message(chat_id=teacher_id, text=header_text, parse_mode="HTML")
+            await bot.copy_message(
+                chat_id=teacher_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=teacher_kb
+            )
+
+        try:
+            await bot.forward_message(
+                chat_id=teacher_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+        except Exception:
+            pass
+
+        await message.answer("✅ Javobingiz o'qituvchiga muvaffaqiyatli yetkazildi!")
+    except Exception as e:
+        await message.answer(f"⚠️ Xabarni yetkazishda xatolik: {e}")
 
 
 # ==============================================================================
@@ -883,7 +975,15 @@ async def cb_launch_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if is_random == 1:
         random.shuffle(processed_questions)
 
-    attempt_id = await db.create_attempt(user_id=user_id, test_id=test_id, total=len(processed_questions), student_name=student_name)
+    cur_data = await state.get_data()
+    last_msg_id = cur_data.get("last_msg_id") or callback.message.message_id
+    attempt_id = await db.create_attempt(
+        user_id=user_id,
+        test_id=test_id,
+        total=len(processed_questions),
+        student_name=student_name,
+        last_msg_id=last_msg_id
+    )
 
     time_limit_minutes = test.get("time_limit_minutes", 15) or 15
     start_ts = time.time()
@@ -902,7 +1002,8 @@ async def cb_launch_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
         answers={},
         time_limit_minutes=time_limit_minutes,
         deadline_ts=deadline_ts,
-        msg_id=None
+        msg_id=None,
+        last_msg_id=last_msg_id
     )
 
     await callback.message.delete()
@@ -1356,15 +1457,16 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
             parse_mode="HTML"
         )
 
-    # O'QITUVCHIGA NATIJANI YUBORISH (BOSILADIGAN TELEGRAM PROFIL HAVOLASI BILAN)
+    # O'QITUVCHIGA NATIJANI YUBORISH (TELEGRAM PROFILIGA HAVOLA BILAN)
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     st_username = user.get("username") if user else None
+
     if st_username:
-        profile_mention = f'<a href="https://t.me/{st_username}">{safe_name}</a>'
+        profile_mention = f'<a href="https://t.me/{st_username}"><b>{safe_name}</b></a> (@{st_username})'
         username_str = f"@{st_username}"
     else:
-        profile_mention = f'<a href="tg://user?id={chat_id}">{safe_name}</a>'
-        username_str = "<i>(yo'q)</i>"
+        profile_mention = f'<a href="tg://user?id={chat_id}"><b>{safe_name}</b></a>'
+        username_str = "<i>(o'rnatilmagan)</i>"
 
     admin_notification = (
         f"🔔 <b>Yangi test natijasi!</b>\n\n"
@@ -1375,7 +1477,7 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
         f"🎯 <b>Natija:</b> {score} / {total} ta ({percent}%)\n"
         f"🎖 <b>Baho:</b> {grade}\n"
         f"⏱ <b>Vaqti:</b> {now_str}\n\n"
-        f"<i>💡 Talabaning Telegram profiliga kirish uchun uning ismi ustiga bosing!</i>"
+        f"<i>💡 Talabaning profiliga kirish uchun uning ismi ustiga bosing (yoki quyidagi '✉️ Talabaga xabar yozish' orqali botdan to'g'ridan-to'g'ri bog'laning).</i>"
     )
 
     recipients = set(ADMIN_IDS)
@@ -1384,9 +1486,16 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
 
     test_id = data.get("test_id")
     notif_rows = []
+    if st_username:
+        notif_rows.append([InlineKeyboardButton(text=f"💬 {safe_name} Telegram profili", url=f"https://t.me/{st_username}")])
+    notif_rows.append([InlineKeyboardButton(text="✉️ Talabaga xabar yozish", callback_data=f"msg_student_{chat_id}_{test_id or 0}")])
+
     if test_id:
         notif_rows.append([InlineKeyboardButton(text="📊 Ushbu test hisoboti (Reyting & Excel)", callback_data=f"test_report_{test_id}")])
-    notif_kb = InlineKeyboardMarkup(inline_keyboard=notif_rows) if notif_rows else None
+
+    notif_kb = InlineKeyboardMarkup(inline_keyboard=notif_rows)
+
+    last_msg_id = data.get("last_msg_id")
 
     for rec_id in recipients:
         try:
@@ -1398,6 +1507,17 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
             )
         except Exception:
             pass
+
+        # Agar talabaning yuborgan xabari bo'lsa, uni forward qilish (Telegram profili ochilishi uchun)
+        if last_msg_id:
+            try:
+                await bot.forward_message(
+                    chat_id=rec_id,
+                    from_chat_id=chat_id,
+                    message_id=last_msg_id
+                )
+            except Exception:
+                pass
 
     await state.clear()
 

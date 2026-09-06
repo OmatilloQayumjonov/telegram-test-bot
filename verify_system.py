@@ -38,6 +38,7 @@ async def run_verification():
     assert student["full_name"] == "Toshmatov Sherzodbek"
     print(f"   [OK] Talaba ismi muvaffaqiyatli tahrirlandi: {student['full_name']}")
 
+
     # O'qituvchi bepul urinishlari (3 ta)
     import time
     dummy_teacher_id = 888000 + int(time.time() % 5000)

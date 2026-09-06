@@ -54,6 +54,10 @@ class AITestState(StatesGroup):
     waiting_for_confirm = State()
 
 
+class TeacherMessageState(StatesGroup):
+    waiting_for_message = State()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS or len(ADMIN_IDS) == 0
 
@@ -1046,6 +1050,7 @@ async def cb_single_test_report(callback: CallbackQuery):
     time_limit_str = f"{t_limit} daqiqa" if t_limit > 0 else "Cheklovsiz"
 
     kb_nav = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✉️ Talabaga xabar yozish (Bog'lanish)", callback_data=f"test_students_msg_{test_id}")],
         [InlineKeyboardButton(text="📤 Havolani guruhga ulashish (Share)", url=share_url)],
         [InlineKeyboardButton(text="🔄 Natijalarni yangilash", callback_data=f"test_report_{test_id}")],
         [InlineKeyboardButton(text="🔙 Boshqa testlar hisoboti", callback_data="admin_export_excel")]
@@ -1098,9 +1103,9 @@ async def cb_single_test_report(callback: CallbackQuery):
         st_uname = r.get("username")
 
         if st_uname:
-            st_link = f'<a href="https://t.me/{st_uname}">{safe_st_name}</a> (@{st_uname})'
+            st_link = f'<a href="https://t.me/{st_uname}"><b>{safe_st_name}</b></a> (@{st_uname})'
         elif st_user_id:
-            st_link = f'<a href="tg://user?id={st_user_id}">{safe_st_name}</a>'
+            st_link = f'<a href="tg://user?id={st_user_id}"><b>{safe_st_name}</b></a>'
         else:
             st_link = f'<b>{safe_st_name}</b>'
 
@@ -1117,7 +1122,7 @@ async def cb_single_test_report(callback: CallbackQuery):
         f"<code>{test_link}</code>\n\n"
         f"🏆 <b>TALABALAR REYTINGI (NATIJALAR):</b>\n"
         + "\n".join(leaderboard_lines) + "\n\n"
-        f"<i>💡 Talabaning Telegram profiliga kirish va unga shaxsiy xabar yozish uchun ro'yxatdagi uning ismi ustiga bosing!</i>\n\n"
+        f"<i>💡 Talabaning profiliga kirish uchun uning ismi ustiga bosing yoki '✉️ Talabaga xabar yozish' tugmasidan foydalaning.</i>\n\n"
     )
 
     if len(results) > 20:
@@ -1151,12 +1156,140 @@ async def cb_single_test_report(callback: CallbackQuery):
         await callback.message.answer(f"⚠️ Excel fayl tayyorlashda xatolik: {e}")
 
 
+@router.callback_query(F.data.startswith("test_students_msg_"))
 @router.callback_query(F.data.startswith("test_students_"))
-async def cb_test_students_profiles(callback: CallbackQuery):
-    await callback.answer(
-        "💡 Talabaning Telegram profiliga kirish uchun hisobotdagi uning ismi ustiga bosing!",
-        show_alert=True
+async def cb_list_students_for_msg(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    raw = callback.data.replace("test_students_msg_", "").replace("test_students_", "")
+    try:
+        test_id = int(raw)
+    except Exception:
+        await callback.answer("Noto'g'ri test ID!", show_alert=True)
+        return
+
+    test, results = await db.get_test_results_summary(test_id, author_id=user_id)
+    if not test or not results:
+        await callback.answer("Hozircha natijalar mavjud emas!", show_alert=True)
+        return
+
+    safe_title = html.escape(test["title"])
+    text = (
+        f"✉️ <b>«{safe_title}» — Talabalarga xabar yuborish</b>\n\n"
+        f"Ushbu bo'lim orqali talabangizning Telegramida username bo'lmasa ham, unga bot orqali to'g'ridan-to'g'ri xabar, tushuntirish yoki baho yuborishingiz mumkin.\n\n"
+        f"<i>Xabar yozmoqchi bo'lgan talabangizni tanlang:</i>"
     )
+
+    kb_rows = []
+    for idx, r in enumerate(results[:25], start=1):
+        st_name = r.get("full_name", "Talaba")
+        st_uid = r.get("user_id")
+        st_uname = r.get("username")
+        tag = f" (@{st_uname})" if st_uname else ""
+        btn_text = f"👤 {idx}. {st_name[:20]}{tag}"
+        kb_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"msg_student_{st_uid}_{test_id}")])
+
+    kb_rows.append([InlineKeyboardButton(text="🔙 Test hisobotiga qaytish", callback_data=f"test_report_{test_id}")])
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("msg_student_"))
+async def cb_start_msg_to_student(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    student_id = int(parts[2])
+    test_id = int(parts[3]) if len(parts) > 3 else 0
+
+    student = await db.get_user(student_id)
+    st_name = html.escape(student.get("full_name", "Talaba") if student else "Talaba")
+    st_uname = student.get("username") if student else None
+
+    await state.set_state(TeacherMessageState.waiting_for_message)
+    await state.update_data(target_student_id=student_id, target_test_id=test_id, student_name=st_name)
+
+    uname_info = f"@{st_uname}" if st_uname else "<i>(o'rnatilmagan)</i>"
+
+    kb_rows = []
+    if st_uname:
+        kb_rows.append([InlineKeyboardButton(text="💬 Telegram profili", url=f"https://t.me/{st_uname}")])
+    kb_rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_teacher_msg")])
+
+    text = (
+        f"✉️ <b>Talabaga xabar yuborish</b>\n\n"
+        f"👤 <b>Talaba:</b> <b>{st_name}</b>\n"
+        f"📱 <b>Username:</b> {uname_info}\n"
+        f"🆔 <b>Telegram ID:</b> <code>{student_id}</code>\n\n"
+        f"✍️ <i>Ushbu talabaga yubormoqchi bo'lgan xabaringizni yozing yoki fayl/ovoz yuboring:</i>\n"
+        f"Xabaringiz bot orqali talabaga zudlik bilan yetkaziladi va u sizga bevosita javob qaytara oladi."
+    )
+    await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_teacher_msg")
+async def cb_cancel_teacher_msg(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Xabar yuborish bekor qilindi.")
+    await callback.answer()
+
+
+@router.message(TeacherMessageState.waiting_for_message)
+async def process_teacher_message_to_student(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    student_id = data.get("target_student_id")
+    test_id = data.get("target_test_id", 0)
+    student_name = data.get("student_name", "Talaba")
+    await state.clear()
+
+    if not student_id:
+        await message.answer("⚠️ Talaba topilmadi.")
+        return
+
+    teacher_name = html.escape(message.from_user.full_name or "O'qituvchi")
+    teacher_uname = message.from_user.username
+
+    student_kb_rows = [
+        [InlineKeyboardButton(text="✍️ O'qituvchiga javob yozish", callback_data=f"reply_teacher_{message.from_user.id}")]
+    ]
+    if teacher_uname:
+        student_kb_rows.append([InlineKeyboardButton(text="👤 O'qituvchining Telegram profili", url=f"https://t.me/{teacher_uname}")])
+
+    st_kb = InlineKeyboardMarkup(inline_keyboard=student_kb_rows)
+
+    header_text = (
+        f"👨‍🏫 <b>O'qituvchingizdan yangi xabar!</b>\n"
+        f"👤 <b>O'qituvchi:</b> <b>{teacher_name}</b>\n\n"
+        f"💬 <b>Xabar matni:</b>\n"
+    )
+
+    try:
+        if message.text:
+            await bot.send_message(
+                chat_id=student_id,
+                text=header_text + message.text + "\n\n<i>(Javob yozish uchun quyidagi 'Javob yozish' tugmasini bosing):</i>",
+                reply_markup=st_kb,
+                parse_mode="HTML"
+            )
+        else:
+            await bot.send_message(chat_id=student_id, text=header_text, parse_mode="HTML")
+            await bot.copy_message(
+                chat_id=student_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=st_kb
+            )
+
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Test hisobotiga qaytish", callback_data=f"test_report_{test_id}" if test_id else "admin_export_excel")]
+        ])
+        await message.answer(
+            f"✅ Xabaringiz <b>{student_name}</b> ga muvaffaqiyatli yetkazildi!\n"
+            f"Talaba xabarni qabul qildi va javob yozganda bot sizga yetkazadi.",
+            reply_markup=back_kb,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(f"⚠️ Xabarni yetkazishda xatolik yuz berdi: {e}")
 
 
 @router.callback_query(F.data == "export_all_excel")
