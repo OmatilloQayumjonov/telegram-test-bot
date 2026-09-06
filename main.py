@@ -3,10 +3,12 @@ import logging
 import sys
 import os
 from aiohttp import web
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import TelegramObject, CallbackQuery, ErrorEvent
+from typing import Callable, Dict, Any, Awaitable
 
 from config import BOT_TOKEN
 from database.db import init_db
@@ -21,6 +23,29 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+class UniversalCallbackAnswerMiddleware(BaseMiddleware):
+    """
+    Barcha inline tugmalar uchun universal himoya:
+    Har qanday callback so'rov kelganda, agar handler javob berishni unutsa yoki
+    xatolik yuz bersa ham, Telegramdagi soat belgisi qotib qolmasligi uchun
+    uni 100% zudlik bilan yopadi.
+    """
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        try:
+            return await handler(event, data)
+        finally:
+            if isinstance(event, CallbackQuery):
+                try:
+                    await event.answer()
+                except Exception:
+                    pass
 
 
 async def health_check(request):
@@ -97,6 +122,24 @@ async def main():
 
     # Test vaqtida pastki tugmalar bosilganda testni kelgan joyidan davom ettiruvchi himoya
     dp.message.outer_middleware(student.InTestProtectionMiddleware())
+
+    # Inline tugmalar hech qachon aylanib qotib qolmasligi uchun universal javob beruvchi himoya
+    dp.callback_query.outer_middleware(UniversalCallbackAnswerMiddleware())
+
+    # Kutilmagan xatoliklarda bot to'xtab qolmasligi uchun global xatolik nazoratchisi
+    @dp.error()
+    async def global_error_handler(event: ErrorEvent):
+        logger.error(f"Global kutilmagan xatolik: {event.exception}", exc_info=True)
+        if event.update and event.update.callback_query:
+            try:
+                await event.update.callback_query.answer("⚠️ Kutilmagan uzilish yuz berdi. Iltimos, qayta urinib ko'ring.", show_alert=True)
+            except Exception:
+                pass
+        elif event.update and event.update.message:
+            try:
+                await event.update.message.answer("⚠️ Kutilmagan uzilish yuz berdi. Iltimos, /start bosing.")
+            except Exception:
+                pass
 
     # Handler routerlarini ulash
     dp.include_router(admin.router)

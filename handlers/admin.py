@@ -4,7 +4,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton
 )
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -27,7 +27,11 @@ import io
 import html
 import urllib.parse
 
-from keyboards import get_admin_reply_keyboard, get_student_reply_keyboard, get_admin_inline_keyboard, get_test_creation_keyboard
+from keyboards import (
+    get_admin_reply_keyboard, get_student_reply_keyboard,
+    get_admin_inline_keyboard, get_test_creation_keyboard,
+    MAIN_MENU_BUTTONS
+)
 
 router = Router()
 
@@ -64,8 +68,8 @@ def is_admin(user_id: int) -> bool:
 
 
 
-@router.message(Command("admin"))
-@router.message(F.text == "👑 Admin Paneli")
+@router.message(StateFilter("*"), Command("admin"))
+@router.message(StateFilter("*"), F.text == "👑 Admin Paneli")
 async def cmd_admin(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("Kechirasiz, siz bot administratori emassiz.")
@@ -323,7 +327,7 @@ async def cb_create_test_manual(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(ManualTestState.waiting_for_title)
+@router.message(ManualTestState.waiting_for_title, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_manual_test_title(message: Message, state: FSMContext):
     title = message.text.strip()
     if len(title) < 3:
@@ -358,7 +362,7 @@ async def process_manual_test_title(message: Message, state: FSMContext):
 
 
 @router.message(ManualTestState.waiting_for_question, F.photo)
-@router.message(ManualTestState.waiting_for_question, F.text)
+@router.message(ManualTestState.waiting_for_question, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_manual_question(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     pending_img_bytes = data.get("pending_photo_bytes")
@@ -545,7 +549,7 @@ async def cb_create_test_ai(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AITestState.waiting_for_material, F.photo)
 @router.message(AITestState.waiting_for_material, F.document)
-@router.message(AITestState.waiting_for_material, F.text)
+@router.message(AITestState.waiting_for_material, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_ai_material(message: Message, state: FSMContext, bot: Bot):
     material_type = "text"
     media_bytes = None
@@ -972,9 +976,11 @@ def get_grade(percent: float) -> str:
         return "Qoniqarsiz (2)"
 
 
-@router.message(F.text == "📊 Excel hisobot")
+@router.message(StateFilter("*"), F.text == "📊 Excel hisobot")
 @router.callback_query(F.data == "admin_export_excel")
-async def cb_export_excel_menu(event: Message | CallbackQuery):
+async def cb_export_excel_menu(event: Message | CallbackQuery, state: FSMContext = None):
+    if state:
+        await state.clear()
     is_cb = isinstance(event, CallbackQuery)
     user_id = event.from_user.id
     target_msg = event.message if is_cb else event
@@ -1233,7 +1239,7 @@ async def cb_cancel_teacher_msg(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(TeacherMessageState.waiting_for_message)
+@router.message(TeacherMessageState.waiting_for_message, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_teacher_message_to_student(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     student_id = data.get("target_student_id")
@@ -1314,7 +1320,7 @@ async def cb_export_all_excel(callback: CallbackQuery):
 # ⚙️ SOZLAMALAR VA TO'LOV BOSHQARUVI (PASTKI TUGMA + ADMIN)
 # ==============================================================================
 
-@router.message(F.text == "⚙️ Obuna va To'lovlar")
+@router.message(StateFilter("*"), F.text == "⚙️ Obuna va To'lovlar")
 @router.callback_query(F.data == "admin_settings")
 async def cb_admin_settings(event: Message | CallbackQuery, state: FSMContext):
     user_id = event.from_user.id
@@ -1374,7 +1380,7 @@ async def cb_set_price_month(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminState.waiting_for_month_price)
+@router.message(AdminState.waiting_for_month_price, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_new_month_price(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -1405,7 +1411,7 @@ async def cb_set_price_year(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminState.waiting_for_year_price)
+@router.message(AdminState.waiting_for_year_price, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_new_year_price(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -1436,7 +1442,7 @@ async def cb_set_click_card(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminState.waiting_for_click_details)
+@router.message(AdminState.waiting_for_click_details, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_new_click_card(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -1468,7 +1474,7 @@ async def cb_set_gemini_key(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminState.waiting_for_gemini_key)
+@router.message(AdminState.waiting_for_gemini_key, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_new_gemini_key(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -1499,7 +1505,7 @@ async def cb_grant_sub_manual(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminState.waiting_for_grant_uid)
+@router.message(AdminState.waiting_for_grant_uid, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_grant_uid(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return

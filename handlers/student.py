@@ -6,14 +6,14 @@ from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     TelegramObject, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 )
-from aiogram.filters import Command, CommandStart, CommandObject
+from aiogram.filters import Command, CommandStart, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 
 from config import ADMIN_IDS
 from database import db
-from keyboards import get_admin_reply_keyboard, get_student_reply_keyboard
+from keyboards import get_admin_reply_keyboard, get_student_reply_keyboard, MAIN_MENU_BUTTONS
 from datetime import datetime
 import time
 import html
@@ -204,7 +204,7 @@ async def cb_edit_my_name(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StudentRegistrationState.waiting_for_name)
+@router.message(StudentRegistrationState.waiting_for_name, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_name(message: Message, state: FSMContext):
     full_name = message.text.strip() if message.text else ""
     parts = full_name.split()
@@ -265,7 +265,7 @@ async def cb_cancel_student_reply(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StudentReplyState.waiting_for_reply)
+@router.message(StudentReplyState.waiting_for_reply, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_student_reply_to_teacher(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     teacher_id = data.get("target_teacher_id")
@@ -329,7 +329,7 @@ async def process_student_reply_to_teacher(message: Message, state: FSMContext, 
 # 🔘 PASTKI DOIMIY TUGMALAR HANDLERLARI (REPLY KEYBOARD)
 # ==============================================================================
 
-@router.message(F.text == "📝 Mavjud Testlar")
+@router.message(StateFilter("*"), F.text == "📝 Mavjud Testlar")
 async def msg_available_tests(message: Message, state: FSMContext):
     stop_timer(message.from_user.id)
     await state.clear()
@@ -338,7 +338,7 @@ async def msg_available_tests(message: Message, state: FSMContext):
     await show_main_menu(message, name, message.from_user.id)
 
 
-@router.message(F.text == "🔗 Test havolalari")
+@router.message(StateFilter("*"), F.text == "🔗 Test havolalari")
 async def msg_test_links(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
     user_id = message.from_user.id
@@ -390,8 +390,8 @@ async def msg_test_links(message: Message, state: FSMContext, bot: Bot):
     )
 
 
-@router.message(Command("teacher"))
-@router.message(F.text == "👨‍🏫 O'qituvchi bo'limi")
+@router.message(StateFilter("*"), Command("teacher"))
+@router.message(StateFilter("*"), F.text == "👨‍🏫 O'qituvchi bo'limi")
 async def msg_teacher_cabinet(message: Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
@@ -426,7 +426,7 @@ async def msg_teacher_cabinet(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")
 
 
-@router.message(F.text == "💳 Obuna sotib olish")
+@router.message(StateFilter("*"), F.text == "💳 Obuna sotib olish")
 async def msg_buy_subscription(message: Message, state: FSMContext):
     await state.clear()
     price_m = await db.get_setting("price_month", "30000")
@@ -453,7 +453,7 @@ async def msg_buy_subscription(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-@router.message(F.text == "✏️ Ismni o'zgartirish")
+@router.message(StateFilter("*"), F.text == "✏️ Ismni o'zgartirish")
 @router.callback_query(F.data == "edit_my_name")
 async def cb_edit_my_name(event: Message | CallbackQuery, state: FSMContext):
     await state.set_state(StudentRegistrationState.editing_name)
@@ -474,7 +474,7 @@ async def cb_edit_my_name(event: Message | CallbackQuery, state: FSMContext):
         await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-@router.message(StudentRegistrationState.editing_name)
+@router.message(StudentRegistrationState.editing_name, F.text, ~F.text.in_(MAIN_MENU_BUTTONS))
 async def process_edit_name(message: Message, state: FSMContext):
     new_name = message.text.strip() if message.text else ""
     parts = new_name.split()
@@ -1390,6 +1390,14 @@ async def cb_back_to_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
 async def cb_do_finish(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await auto_finish_test(callback.message.chat.id, state, bot, reason="manual")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("opt_") | F.data.in_(["nav_prev", "nav_next", "ask_finish", "back_to_test", "do_finish"]))
+async def cb_stale_test_buttons(callback: CallbackQuery, state: FSMContext):
+    await callback.answer(
+        "⚠️ Ushbu test sessiyasi yakunlangan yoki server yangilangan.\nIltimos, test havolasiga qayta kiring.",
+        show_alert=True
+    )
 
 
 async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: str = "manual"):

@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "AI generatsiyasi 7 ta model bilan tezlashtirildi, 503 va xatoliklar bartaraf etildi, botdan Gemini yozuvlari tozalandi"
+git commit -m "Tugmachalar qotib qolishi va ishlamay qolish muammosi to'liq hal qilindi (StateFilter, universal middleware va stale callback himoyasi)"
 git push origin main
 
 echo.

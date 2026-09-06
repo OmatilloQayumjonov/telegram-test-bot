@@ -1,5 +1,16 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
+MAIN_MENU_BUTTONS = [
+    "📝 Mavjud Testlar",
+    "🔗 Test havolalari",
+    "👨‍🏫 O'qituvchi bo'limi",
+    "📊 Excel hisobot",
+    "👑 Admin Paneli",
+    "⚙️ Obuna va To'lovlar",
+    "💳 Obuna sotib olish",
+    "✏️ Ismni o'zgartirish"
+]
+
 
 def get_admin_reply_keyboard() -> ReplyKeyboardMarkup:
     """Asosiy admin uchun pastki doimiy menyu tugmalari"""
