@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Rasmli va jadvalli savollarni qabul qilish va Telegramda korsatish toliq qoshildi"
+git commit -m "Rasmli savollarni yuklashdagi time xatoligi to'liq tuzatildi"
 git push origin main
 
 echo.

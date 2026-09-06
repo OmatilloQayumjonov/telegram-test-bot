@@ -17,3 +17,5 @@ env/
 data/*.xlsx
 data/*.docx
 namuna.docx
+data/images/*
+!data/images/.gitkeep

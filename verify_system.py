@@ -44,9 +44,21 @@ async def run_verification():
     assert can_up is True and reason == "free"
     print("   [OK] O'qituvchiga dastlabki 3 ta bepul urinish tasdiqlandi")
 
-    # Testni bazaga kiritish
-    test_id = await db.add_test(parsed['title'], author_id=dummy_teacher_id, questions=parsed['questions'], time_limit_minutes=20)
-    print(f"   [OK] Yangi test qo'shildi (ID: #{test_id})")
+    # Testni bazaga kiritish (matnli va rasmli savol)
+    test_questions = list(parsed['questions'])
+    test_questions.append({
+        "question_text": "Quyidagi rasmda qaysi geometrik shakl tasvirlangan?",
+        "option_a": "Uchburchak",
+        "option_b": "Kvadrat",
+        "option_c": "Aylana",
+        "option_d": "Trapetsiya",
+        "correct_option": "B",
+        "explanation": "Rasmda kvadrat ko'rsatilgan.",
+        "image_bytes": b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRtest",
+        "image_ext": "png"
+    })
+    test_id = await db.add_test(parsed['title'], author_id=dummy_teacher_id, questions=test_questions, time_limit_minutes=20)
+    print(f"   [OK] Yangi test qo'shildi (ID: #{test_id}), rasmli savol muvaffaqiyatli saqlandi")
 
     # Obuna berish tekshiruvi
     new_until = await db.grant_subscription(dummy_teacher_id, 30)

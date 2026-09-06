@@ -1,4 +1,6 @@
 import aiosqlite
+import os
+import time
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from config import DB_FULL_PATH, ADMIN_IDS
@@ -328,8 +330,6 @@ async def add_test(title: str, author_id: int, questions: list, time_limit_minut
             (title, author_id, time_limit_minutes, is_random)
         )
         test_id = cursor.lastrowid
-
-        import os
         os.makedirs("data/images", exist_ok=True)
 
         for idx, q in enumerate(questions, start=1):
