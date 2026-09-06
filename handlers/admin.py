@@ -201,14 +201,11 @@ async def cb_get_sample(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message(F.document, AdminState.waiting_for_docx)
-@router.message(F.document, AdminState.waiting_for_pdf)
-@router.message(F.document)
+@router.message(AdminState.waiting_for_docx, F.document)
+@router.message(AdminState.waiting_for_pdf, F.document)
+@router.message(StateFilter(None), F.document)
 async def handle_document_upload(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    # Agar AI rejimida fayl kutayotgan bo'lsa, bu handler uni o'zlashtirib olmasin
-    if current_state == AITestState.waiting_for_material.state:
-        return
+
 
     user_id = message.from_user.id
     doc = message.document
@@ -664,10 +661,16 @@ async def process_ai_material(message: Message, state: FSMContext, bot: Bot):
                 prompt_text = (caption_extra + "\n\n" + extracted_text).strip()
                 file_info_header = f"📄 <b>Word fayli muvaffaqiyatli o'qildi!</b>\n<i>Fayl: {html.escape(doc.file_name or 'Word')} ({len(extracted_text)} ta belgi)</i>\n\n"
             else:
-                material_type = "docx"
-                media_bytes = raw_bytes
-                prompt_text = caption_extra
-                file_info_header = f"📄 <b>Word fayli qabul qilindi!</b>\n\n"
+                try:
+                    await loading_msg.delete()
+                except Exception:
+                    pass
+                await message.answer(
+                    "❌ <b>Word faylidan matn topilmadi!</b>\n\n"
+                    "Faylda matn mavjudligini tekshiring yoki darslik matnini botga to'g'ridan-to'g'ri xabar sifatida yuboring.",
+                    parse_mode="HTML"
+                )
+                return
 
         elif is_pdf:
             extracted_text, compact_pdf, total_pages = extract_text_from_pdf_bytes(raw_bytes)
@@ -680,12 +683,18 @@ async def process_ai_material(message: Message, state: FSMContext, bot: Bot):
                 material_type = "pdf"
                 media_bytes = compact_pdf
                 prompt_text = caption_extra
-                file_info_header = f"📑 <b>PDF darslik qabul qilindi!</b>\n\n"
+                file_info_header = f"📑 <b>PDF darslik sahifalari qabul qilindi!</b>\n\n"
             else:
-                material_type = "pdf"
-                media_bytes = raw_bytes
-                prompt_text = caption_extra
-                file_info_header = f"📑 <b>PDF darslik qabul qilindi!</b>\n\n"
+                try:
+                    await loading_msg.delete()
+                except Exception:
+                    pass
+                await message.answer(
+                    "❌ <b>PDF faylini o'qib bo'lmadi!</b>\n\n"
+                    "Iltimos, PDF matnini nusxalab yuboring yoki fayl hajmi juda katta bo'lmasa qayta urinib ko'ring.",
+                    parse_mode="HTML"
+                )
+                return
 
         elif is_txt:
             try:
