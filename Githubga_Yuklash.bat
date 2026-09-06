@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Talabaga o'qituvchining telegram profili tugmasi olib tashlandi, faqat bot orqali javob yozish qoldirildi"
+git commit -m "AI generatsiyasi 7 ta model bilan tezlashtirildi, 503 va xatoliklar bartaraf etildi, botdan Gemini yozuvlari tozalandi"
 git push origin main
 
 echo.

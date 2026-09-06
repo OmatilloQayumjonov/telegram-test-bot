@@ -12,14 +12,15 @@ class AIGeneratorError(Exception):
     pass
 
 
-# Eng tezkor va yuqori o'tkazuvchanlikka ega modellar birinchi o'ringa qo'yildi
+# Barqaror, yuqori o'tkazuvchanlikka ega va tezkor rasmiy modellar zanjiri
 MODELS_TO_TRY = [
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.5-flash",
-    "gemini-1.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.7-flash"
+    "gemini-2.5-flash",      # Eng tezkor va aqlli (thinkingBudget=0 bilan 1.5-2.5 soniya)
+    "gemini-2.0-flash",      # Rasmiy yuqori tezlikdagi production model
+    "gemini-2.0-flash-lite", # Ultra yengil va eng kam yuklamaga ega model
+    "gemini-1.5-flash",      # Katta kvotaga ega, 99.99% barqaror model
+    "gemini-1.5-flash-8b",   # Zaxira yengil model
+    "gemini-2.5-pro",        # Yuqori mantiqiy zaxira model
+    "gemini-1.5-pro"         # Yakuniy zaxira model
 ]
 
 SYSTEM_INSTRUCTION = (
@@ -32,33 +33,43 @@ SYSTEM_INSTRUCTION = (
 
 
 def _clean_json_text(raw_text: str) -> str:
-    """Markdown bloklari bo'lsa tozalaydi (```json ... ```)"""
+    """Markdown bloklari va ortiqcha belgilarni tozalab, sof JSON ni ajratib oladi"""
     text = raw_text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text)
+    text = text.strip()
+    # Agar model boshida yoki oxirida biror matn qo'shgan bo'lsa, eng tashqi { va } ni ajratib olamiz
+    if not (text.startswith("{") and text.endswith("}")):
+        m = re.search(r"(\{[\s\S]*\})", text)
+        if m:
+            text = m.group(1)
     return text.strip()
 
 
 async def _call_gemini_api(payload: dict, api_key: str) -> dict:
     if not api_key:
         raise AIGeneratorError(
-            "Gemini API kaliti kiritilmagan!\n"
+            "AI API kaliti kiritilmagan!\n"
             "Iltimos, administratorga murojaat qiling yoki Admin Panelidagi sozlamalardan API kalitni kiriting."
         )
 
     last_error = ""
-    timeout = aiohttp.ClientTimeout(total=45)
+    timeout = aiohttp.ClientTimeout(total=28, connect=8)
 
-    # 2 bosqichli avtomatik qayta urinish (modellar zanjiri bo'ylab)
-    for cycle in range(2):
+    # 3 bosqichli avtomatik qayta urinish (eng barqaror modellar bo'ylab)
+    for cycle in range(3):
         for model_name in MODELS_TO_TRY:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
 
-            # 2.5 va 3.x modellarda tezlikni eng yuqori darajaga chiqarish uchun thinking ni 0 qilamiz
+            # Faqat 2.5 modellarida tezlikni maksimal qilish uchun thinking ni 0 qilamiz
             model_payload = json.loads(json.dumps(payload))
-            if ("2.5" in model_name or "3." in model_name) and "generationConfig" in model_payload:
+            if "2.5" in model_name and "generationConfig" in model_payload:
                 model_payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+            else:
+                # Boshqa modellarda thinkingConfig bo'lsa xatolik (400) beradi, shuning uchun olib tashlanadi
+                if "generationConfig" in model_payload and "thinkingConfig" in model_payload["generationConfig"]:
+                    del model_payload["generationConfig"]["thinkingConfig"]
 
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -71,13 +82,15 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
                             if isinstance(data, dict) and "error" in data:
                                 err_msg = data["error"].get("message", str(data["error"]))
 
-                            # Agar API kalit mutlaqo yaroqsiz bo'lsa (barcha modelda 400 API_KEY_INVALID)
+                            # Agar API kalit mutlaqo yaroqsiz bo'lsa (400 API_KEY_INVALID)
                             if "API key not valid" in err_msg or (status == 400 and "API_KEY_INVALID" in err_msg):
-                                raise AIGeneratorError("Kiritilgan Gemini API kaliti yaroqsiz! Iltimos, sozlamalardan to'g'ri kalitni kiriting.")
+                                raise AIGeneratorError("Kiritilgan AI API kaliti yaroqsiz! Iltimos, sozlamalardan to'g'ri kalitni kiriting.")
 
-                            # Agar model thinkingConfig ni qabul qilmasa (400), oddiy payload bilan darhol qayta urinib ko'ramiz
-                            if status == 400 and "thinking" in err_msg.lower():
+                            # Agar model thinkingConfig ni qabul qilmasa (400), darhol ushbu modelni thinkingConfigsiz sinaymiz
+                            if status == 400 and ("thinking" in err_msg.lower() or "unknown field" in err_msg.lower()):
                                 plain_payload = json.loads(json.dumps(payload))
+                                if "generationConfig" in plain_payload and "thinkingConfig" in plain_payload["generationConfig"]:
+                                    del plain_payload["generationConfig"]["thinkingConfig"]
                                 async with session.post(url, json=plain_payload) as retry_resp:
                                     if retry_resp.status == 200:
                                         retry_data = await retry_resp.json()
@@ -88,20 +101,20 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
                                                 raw_json = parts[0].get("text", "")
                                                 return json.loads(_clean_json_text(raw_json))
 
-                            # 503 (High demand), 429 (Rate limit), 404 (Topilmadi), 500/502/504 (Server band)
-                            # Bularning barchasida to'xtab qolmasdan DARHOL KEYINGI MODELGA O'TAMIZ!
-                            last_error = f"{model_name}: {err_msg} ({status})"
+                            # 503 (High demand), 429 (Rate limit), 404, 500, 502, 504 holatlarida
+                            # to'xtamasdan DARHOL keyingi barqaror modelga o'tamiz
+                            last_error = f"{err_msg} ({status})"
                             continue
 
                         # Muvaffaqiyatli 200 javob
                         candidates = data.get("candidates", [])
                         if not candidates:
-                            last_error = f"{model_name}: Bo'sh javob"
+                            last_error = "Bo'sh javob keldi"
                             continue
 
                         content_parts = candidates[0].get("content", {}).get("parts", [])
                         if not content_parts:
-                            last_error = f"{model_name}: Javobda matn topilmadi"
+                            last_error = "Javobda matn topilmadi"
                             continue
 
                         raw_json = content_parts[0].get("text", "")
@@ -110,21 +123,24 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
                         try:
                             parsed = json.loads(cleaned)
                             return parsed
-                        except json.JSONDecodeError as je:
-                            last_error = f"{model_name}: JSON format xatoligi ({str(je)})"
+                        except json.JSONDecodeError:
+                            # Agar model JSON formatida xatoga yo'l qo'ygan bo'lsa, keyingi modelga o'tamiz
+                            last_error = "JSON format xatoligi"
                             continue
 
-            except (aiohttp.ClientError, asyncio.TimeoutError) as ce:
-                last_error = f"{model_name}: Tarmoq / Timeout ({str(ce)})"
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                last_error = "Tarmoq ulanishida uzilish"
                 continue
 
-        # Birinchi urinishda barcha modellar band bo'lsa, 1 soniya kutib qayta urinadi
+        # Agar birinchi tsiklda barcha modellar band bo'lsa, biroz kutib qayta urinadi
         if cycle == 0:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
+        elif cycle == 1:
+            await asyncio.sleep(1.0)
 
     raise AIGeneratorError(
-        f"Gemini AI xizmatida vaqtinchalik yuklama yuqori bo'ldi ({last_error}).\n"
-        "Iltimos, bir necha soniyadan so'ng qayta urinib ko'ring."
+        "AI xizmatida vaqtinchalik yuqori yuklama yuzaga keldi.\n"
+        "Iltimos, bir necha soniyadan so'ng qayta urinib ko'ring yoki boshqa material yuboring."
     )
 
 
@@ -179,7 +195,7 @@ async def generate_test_from_content(
     media_parts: Optional[List[dict]] = None
 ) -> Dict[str, Any]:
     """
-    Google Gemini yordamida har qanday matn yoki media asosida test tuzadi.
+    Sun'iy intellekt (AI) yordamida har qanday matn yoki media asosida test tuzadi.
     """
     prompt = (
         f"{SYSTEM_INSTRUCTION}\n\n"

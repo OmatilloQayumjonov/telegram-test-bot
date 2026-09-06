@@ -510,12 +510,12 @@ async def cb_create_test_ai(callback: CallbackQuery, state: FSMContext):
 
     if not gemini_key:
         text = (
-            "🤖 <b>AI Test Yaratuvchi (Google Gemini)</b>\n\n"
-            "⚠️ Ushbu funksiyadan foydalanish uchun <b>Gemini API kaliti</b> kiritilishi kerak!\n\n"
-            "Google AI Studio'dan mutlaqo bepul API kalit olishingiz mumkin:\n"
+            "🤖 <b>AI Test Yaratuvchi</b>\n\n"
+            "⚠️ Ushbu funksiyadan foydalanish uchun <b>AI API kaliti</b> kiritilishi kerak!\n\n"
+            "AI Studio'dan mutlaqo bepul API kalit olishingiz mumkin:\n"
             "1. <a href='https://aistudio.google.com/app/apikey'>aistudio.google.com</a> ga kiring;\n"
             "2. 'Create API key' tugmasini bosing va kalitni nusxalang;\n"
-            "3. Botda <b>👑 Admin Paneli ➡️ ⚙️ Sozlamalar ➡️ 🔑 Gemini AI kalitini sozlash</b> tugmasi orqali kiriting.\n\n"
+            "3. Botda <b>👑 Admin Paneli ➡️ ⚙️ Sozlamalar ➡️ 🔑 AI API kalitini sozlash</b> tugmasi orqali kiriting.\n\n"
             "<i>Kalit kiritilishi bilanoq AI test tuzish to'liq ishlaydi!</i>"
         )
         kb_rows = []
@@ -528,7 +528,7 @@ async def cb_create_test_ai(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(AITestState.waiting_for_material)
     text = (
-        "🤖 <b>AI Test Yaratuvchi (Google Gemini 2.5)</b>\n\n"
+        "🤖 <b>Aqlli AI Test Yaratuvchi</b>\n\n"
         "AI qanday material asosida test tuzsin? Quyidagilardan birini yuboring:\n\n"
         "1️⃣ <b>Mavzu yoki matn:</b> Masalan: <i>'Amir Temur davlati mavzusida 5 ta qiyin test tuz'</i> yoki dars konspekti matni;\n"
         "2️⃣ <b>Rasm (Foto):</b> Darslik sahifasi yoki konspekt daftari fotosuratini yuboring;\n"
@@ -626,7 +626,7 @@ async def run_ai_test_generation(event: Message, state: FSMContext, count: int, 
 
     api_key = await db.get_setting("gemini_api_key", "") or config.GEMINI_API_KEY
     if not api_key:
-        err_text = "❌ Gemini API kaliti topilmadi. Admin orqali sozlang."
+        err_text = "❌ AI API kaliti topilmadi. Admin orqali sozlang."
         if is_callback:
             await event.edit_text(err_text)
         else:
@@ -635,8 +635,8 @@ async def run_ai_test_generation(event: Message, state: FSMContext, count: int, 
         return
 
     wait_text = (
-        f"⏳ <b>Google Gemini AI ma'lumotlarni tahlil qilib, {count} ta test tuzmoqda...</b>\n\n"
-        "<i>Iltimos kuting (10-25 soniya)...</i>"
+        f"⏳ <b>Aqlli AI tizimi ma'lumotlarni tahlil qilib, {count} ta test tuzmoqda...</b>\n\n"
+        "<i>Iltimos kuting (10-20 soniya)...</i>"
     )
     if is_callback:
         status_msg = await event.edit_text(wait_text, parse_mode="HTML")
@@ -1338,7 +1338,7 @@ async def cb_admin_settings(event: Message | CallbackQuery, state: FSMContext):
         f"💳 <b>1 oylik narx:</b> {price_m} so'm\n"
         f"💳 <b>1 yillik narx:</b> {price_y} so'm\n"
         f"📲 <b>Click rekvizit:</b> <code>{click_det}</code>\n"
-        f"🤖 <b>Gemini AI API:</b> {gemini_status} ({gemini_preview})\n\n"
+        f"🤖 <b>AI API xizmati:</b> {gemini_status} ({gemini_preview})\n\n"
         "O'zgartirish yoki sozlash uchun tanlang:"
     )
 
@@ -1346,7 +1346,7 @@ async def cb_admin_settings(event: Message | CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="✏️ 1 oylik narxni o'zgartirish", callback_data="set_price_month")],
         [InlineKeyboardButton(text="✏️ 1 yillik narxni o'zgartirish", callback_data="set_price_year")],
         [InlineKeyboardButton(text="✏️ Click kartani o'zgartirish", callback_data="set_click_card")],
-        [InlineKeyboardButton(text="🔑 Gemini AI kalitini sozlash", callback_data="set_gemini_key")],
+        [InlineKeyboardButton(text="🔑 AI API kalitini sozlash", callback_data="set_gemini_key")],
         [InlineKeyboardButton(text="🎁 Qo'lda obuna berish (ID orqali)", callback_data="grant_sub_manual")],
         [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="admin_menu")]
     ])
@@ -1456,10 +1456,10 @@ async def cb_set_gemini_key(callback: CallbackQuery, state: FSMContext):
     key_preview = f"<code>{current_key[:8]}...{current_key[-4:]}</code>" if current_key else "Mavjud emas"
 
     text = (
-        "🔑 <b>Google Gemini AI API Kalitini Sozlash</b>\n\n"
+        "🔑 <b>AI API Kalitini Sozlash</b>\n\n"
         f"Hozirgi kalit: {key_preview}\n\n"
         "Yangi API kalitni ushbu chatga xabar qilib yuboring:\n"
-        "(Google AI Studio: <a href='https://aistudio.google.com/app/apikey'>aistudio.google.com</a> dan mutlaqo bepul olinadi)"
+        "(AI Studio: <a href='https://aistudio.google.com/app/apikey'>aistudio.google.com</a> dan mutlaqo bepul olinadi)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="admin_settings")]
@@ -1474,12 +1474,12 @@ async def process_new_gemini_key(message: Message, state: FSMContext):
         return
     key = message.text.strip()
     if len(key) < 15:
-        await message.answer("⚠️ API kalit juda qisqa ko'rinmoqda. Iltimos, Google AI Studio'dan olingan to'liq kalitni yuboring:")
+        await message.answer("⚠️ API kalit juda qisqa ko'rinmoqda. Iltimos, AI Studio'dan olingan to'liq kalitni yuboring:")
         return
 
     await db.set_setting("gemini_api_key", key)
     await state.clear()
-    await message.answer("✅ <b>Gemini AI API kaliti muvaffaqiyatli saqlandi!</b>\nEndi botda AI test yaratuvchi funksiyasi to'liq ishlaydi.", parse_mode="HTML")
+    await message.answer("✅ <b>AI API kaliti muvaffaqiyatli saqlandi!</b>\nEndi botda AI test yaratuvchi funksiyasi to'liq ishlaydi.", parse_mode="HTML")
     await message.answer("Boshqaruv:", reply_markup=get_admin_reply_keyboard())
 
 
