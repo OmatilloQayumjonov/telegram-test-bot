@@ -50,6 +50,22 @@ def create_sample_docx(output_path: str = "namuna.docx") -> str:
     doc.add_paragraph("D) Algoritm faqat kompyuterda ishlashi kerak")
     doc.add_paragraph("Javob: B")
     doc.add_paragraph("Izoh: Diskretlik - bu jarayonning alohida, chekli qadamlarga bo'linishini ifodalaydi.")
+    doc.add_paragraph("")
+
+    # 5-savol: Jadvalli savol namunasi
+    doc.add_paragraph("5. Quyidagi jadval ma'lumotlariga qarab to'g'ri xulosani aniqlang:")
+    tbl = doc.add_table(rows=3, cols=2)
+    tbl.rows[0].cells[0].text = "Xotira turi"
+    tbl.rows[0].cells[1].text = "Tezlik darajasi"
+    tbl.rows[1].cells[0].text = "Kesh xotira (Cache)"
+    tbl.rows[1].cells[1].text = "Juda yuqori"
+    tbl.rows[2].cells[0].text = "Doimiy xotira (HDD)"
+    tbl.rows[2].cells[1].text = "Past"
+    doc.add_paragraph("A) HDD kesh xotiradan tezroq")
+    doc.add_paragraph("*B) Kesh xotira eng yuqori tezlikka ega")
+    doc.add_paragraph("C) Ikkala xotira tezligi teng")
+    doc.add_paragraph("D) Barcha ma'lumotlar noto'g'ri")
+    doc.add_paragraph("Izoh: Kesh xotira to'g'ridan-to'g'ri protsessor ichida joylashgan bo'lib, eng tezkor hisoblanadi.")
 
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)

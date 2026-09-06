@@ -1,7 +1,8 @@
 import asyncio
+import os
 from typing import Callable, Dict, Any, Awaitable
 from aiogram import Router, F, Bot, BaseMiddleware
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, TelegramObject
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, TelegramObject, FSInputFile
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -907,14 +908,24 @@ async def run_student_timer(chat_id: int, state: FSMContext, bot: Bot, attempt_i
             )
             kb = build_question_keyboard(q_id, idx, total, chosen, len(answers))
 
+            is_photo = data.get("is_photo", False)
             try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=text,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
+                if is_photo:
+                    await bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        caption=text[:1024],
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        text=text,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
             except TelegramBadRequest:
                 pass
             except Exception:
@@ -1007,35 +1018,106 @@ async def render_and_send_question(chat_id: int, state: FSMContext, bot: Bot, is
     )
 
     msg_id = data.get("msg_id")
+    image_path = q.get("image_path")
+    has_image = bool(image_path and os.path.exists(image_path))
+    last_was_photo = data.get("is_photo", False)
 
-    if is_new or not msg_id:
-        if msg_id and is_new:
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception:
-                pass
-
-        sent = await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=kb,
-            protect_content=True,
-            parse_mode="HTML"
-        )
-        await state.update_data(msg_id=sent.message_id)
-    else:
-        try:
-            await bot.edit_message_text(
+    if has_image:
+        # Rasmli savol
+        if len(text) <= 1024:
+            if is_new or not msg_id or not last_was_photo:
+                if msg_id:
+                    try:
+                        await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                    except Exception:
+                        pass
+                sent = await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=FSInputFile(image_path),
+                    caption=text,
+                    reply_markup=kb,
+                    protect_content=True,
+                    parse_mode="HTML"
+                )
+                await state.update_data(msg_id=sent.message_id, is_photo=True)
+            else:
+                try:
+                    await bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        caption=text,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                except TelegramBadRequest:
+                    pass
+                except Exception:
+                    try:
+                        await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                    except Exception:
+                        pass
+                    sent = await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=FSInputFile(image_path),
+                        caption=text,
+                        reply_markup=kb,
+                        protect_content=True,
+                        parse_mode="HTML"
+                    )
+                    await state.update_data(msg_id=sent.message_id, is_photo=True)
+        else:
+            if msg_id:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                except Exception:
+                    pass
+            await bot.send_photo(
                 chat_id=chat_id,
-                message_id=msg_id,
-                text=text,
-                reply_markup=kb,
+                photo=FSInputFile(image_path),
+                caption="🖼 <b>Savol rasmi:</b>",
+                protect_content=True,
                 parse_mode="HTML"
             )
-        except TelegramBadRequest:
-            pass
-        except Exception:
+            sent = await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=kb,
+                protect_content=True,
+                parse_mode="HTML"
+            )
+            await state.update_data(msg_id=sent.message_id, is_photo=False)
+    else:
+        # Oddiy matnli savol
+        if is_new or not msg_id or last_was_photo:
+            if msg_id:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                except Exception:
+                    pass
+            sent = await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=kb,
+                protect_content=True,
+                parse_mode="HTML"
+            )
+            await state.update_data(msg_id=sent.message_id, is_photo=False)
+        else:
             try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except TelegramBadRequest:
+                pass
+            except Exception:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                except Exception:
+                    pass
                 sent = await bot.send_message(
                     chat_id=chat_id,
                     text=text,
@@ -1043,9 +1125,7 @@ async def render_and_send_question(chat_id: int, state: FSMContext, bot: Bot, is
                     protect_content=True,
                     parse_mode="HTML"
                 )
-                await state.update_data(msg_id=sent.message_id)
-            except Exception:
-                pass
+                await state.update_data(msg_id=sent.message_id, is_photo=False)
 
 
 @router.callback_query(TestSessionState.in_test, F.data.startswith("opt_"))
@@ -1298,12 +1378,37 @@ async def cb_review_mistakes(callback: CallbackQuery, bot: Bot):
             f"{exp}"
         )
 
-        await bot.send_message(
-            chat_id=callback.message.chat.id,
-            text=q_text,
-            protect_content=True,
-            parse_mode="HTML"
-        )
+        img_p = m.get("image_path")
+        if img_p and os.path.exists(img_p):
+            if len(q_text) <= 1024:
+                await bot.send_photo(
+                    chat_id=callback.message.chat.id,
+                    photo=FSInputFile(img_p),
+                    caption=q_text,
+                    protect_content=True,
+                    parse_mode="HTML"
+                )
+            else:
+                await bot.send_photo(
+                    chat_id=callback.message.chat.id,
+                    photo=FSInputFile(img_p),
+                    caption=f"❌ <b>{i}-xato savol rasmi:</b>",
+                    protect_content=True,
+                    parse_mode="HTML"
+                )
+                await bot.send_message(
+                    chat_id=callback.message.chat.id,
+                    text=q_text,
+                    protect_content=True,
+                    parse_mode="HTML"
+                )
+        else:
+            await bot.send_message(
+                chat_id=callback.message.chat.id,
+                text=q_text,
+                protect_content=True,
+                parse_mode="HTML"
+            )
 
     await callback.answer()
 

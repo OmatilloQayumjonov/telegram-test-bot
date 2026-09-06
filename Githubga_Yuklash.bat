@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Test vaqtida pastki menyu tugmalari bosilsa ham testni kelgan joyidan davom ettirish himoyasi qoshildi"
+git commit -m "Rasmli va jadvalli savollarni qabul qilish va Telegramda korsatish toliq qoshildi"
 git push origin main
 
 echo.

@@ -168,6 +168,9 @@ async def handle_docx_upload(message: Message, state: FSMContext):
 
         test_id = await db.add_test(title=title, author_id=user_id, questions=questions, time_limit_minutes=15)
 
+        img_count = sum(1 for q in questions if q.get("image_path") or q.get("image_bytes"))
+        img_info = f"\n🖼 <b>Rasmli savollar:</b> {img_count} ta" if img_count > 0 else ""
+
         safe_title = html.escape(title)
         bot_user = await message.bot.get_me()
         bot_username = bot_user.username
@@ -177,7 +180,7 @@ async def handle_docx_upload(message: Message, state: FSMContext):
         await status_msg.edit_text(
             f"✅ <b>Test muvaffaqiyatli saqlandi!</b>\n\n"
             f"📌 <b>Test nomi:</b> {safe_title}\n"
-            f"🔢 <b>Savollar soni:</b> {len(questions)} ta\n"
+            f"🔢 <b>Savollar soni:</b> {len(questions)} ta{img_info}\n"
             f"⏱ <b>Standart vaqt:</b> 15 daqiqa (sozlamalardan o'zgartira olasiz)\n"
             f"🆔 <b>Test ID:</b> #{test_id}\n\n"
             f"🔗 <b>Talabalarga yuborish uchun maxsus havola:</b>\n"

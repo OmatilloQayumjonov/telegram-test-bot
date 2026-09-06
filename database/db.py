@@ -85,9 +85,15 @@ async def init_db():
                 option_d TEXT NOT NULL,
                 correct_option TEXT NOT NULL,
                 explanation TEXT,
+                image_path TEXT,
                 FOREIGN KEY (test_id) REFERENCES tests (id) ON DELETE CASCADE
             )
         """)
+
+        try:
+            await db.execute("ALTER TABLE questions ADD COLUMN image_path TEXT")
+        except Exception:
+            pass
 
         # Test topshirish urinishlari
         await db.execute("""
@@ -323,11 +329,27 @@ async def add_test(title: str, author_id: int, questions: list, time_limit_minut
         )
         test_id = cursor.lastrowid
 
-        for q in questions:
+        import os
+        os.makedirs("data/images", exist_ok=True)
+
+        for idx, q in enumerate(questions, start=1):
+            image_path = q.get("image_path")
+            image_bytes = q.get("image_bytes")
+            if image_bytes and not image_path:
+                ext = q.get("image_ext", "png")
+                img_file = f"data/images/test_{test_id}_q_{idx}_{int(time.time()*1000)}.{ext}"
+                try:
+                    with open(img_file, "wb") as f:
+                        f.write(image_bytes)
+                    image_path = img_file
+                    q["image_path"] = image_path
+                except Exception:
+                    pass
+
             await db.execute("""
                 INSERT INTO questions (
-                    test_id, question_text, option_a, option_b, option_c, option_d, correct_option, explanation
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    test_id, question_text, option_a, option_b, option_c, option_d, correct_option, explanation, image_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 test_id,
                 q["question_text"],
@@ -336,7 +358,8 @@ async def add_test(title: str, author_id: int, questions: list, time_limit_minut
                 q["option_c"],
                 q["option_d"],
                 q["correct_option"].upper(),
-                q.get("explanation", "")
+                q.get("explanation", ""),
+                image_path
             ))
 
         await db.commit()
@@ -567,7 +590,7 @@ async def finish_attempt(attempt_id: int):
 async def get_attempt_mistakes(attempt_id: int):
     async with get_db() as db:
         cursor = await db.execute("""
-            SELECT q.question_text, q.explanation,
+            SELECT q.question_text, q.explanation, q.image_path,
                    COALESCE(ans.selected_option, 'Belgilanmagan') as selected_option,
                    COALESCE(ans.selected_text, 'Javob berilmagan') as selected_text,
                    COALESCE(ans.correct_text, 
