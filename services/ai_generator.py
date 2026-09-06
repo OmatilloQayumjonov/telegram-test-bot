@@ -302,6 +302,91 @@ async def generate_test_from_image(
     )
 
 
+def extract_text_from_docx_bytes(docx_bytes: bytes) -> str:
+    """Word (.docx va .doc) faylidan barcha matnlarni tezkor va to'liq ajratib oladi"""
+    import io
+    # 1. Standart .docx (XML) tahlili
+    try:
+        import docx
+        doc = docx.Document(io.BytesIO(docx_bytes))
+        paragraphs_text = []
+        for p in doc.paragraphs:
+            t = p.text.strip()
+            if t:
+                paragraphs_text.append(t)
+        for tbl in doc.tables:
+            for row in tbl.rows:
+                r_text = " | ".join([c.text.strip() for c in row.cells if c.text.strip()])
+                if r_text:
+                    paragraphs_text.append(r_text)
+        full_text = "\n".join(paragraphs_text)
+        if full_text.strip():
+            return full_text.strip()
+    except Exception:
+        pass
+
+    # 2. Eskiroq .doc (binary) yoki g'ayrioddiy kodirovkali fayllar uchun zaxira matn chiqaruvchi
+    try:
+        raw_text = docx_bytes.decode("utf-8", errors="ignore")
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', ' ', raw_text)
+        tokens = [word for word in cleaned.split() if len(word) > 1]
+        if len(tokens) > 20:
+            return " ".join(tokens[:5000])
+    except Exception:
+        pass
+
+    return ""
+
+
+def extract_text_from_pdf_bytes(pdf_bytes: bytes, max_pages: int = 50) -> Tuple[str, Optional[bytes], int]:
+    """
+    PDF faylidan matnni ajratib oladi.
+    Qaytaradi: (extracted_text, compact_pdf_bytes_if_scanned, total_pages)
+    """
+    import io
+    from pypdf import PdfReader, PdfWriter
+
+    total_pages = 0
+    extracted_text = ""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        total_pages = len(reader.pages)
+        text_chunks = []
+        pages_to_read = min(total_pages, max_pages)
+
+        for i in range(pages_to_read):
+            try:
+                page = reader.pages[i]
+                t = page.extract_text()
+                if t and t.strip():
+                    text_chunks.append(t.strip())
+            except Exception:
+                continue
+
+        extracted_text = "\n\n".join(text_chunks)
+    except Exception:
+        pass
+
+    # Agar matn topilgan bo'lsa (kamida 80 ta belgi)
+    if len(extracted_text.strip()) >= 80:
+        return extracted_text.strip(), None, total_pages
+
+    # Agar matn deyarli topilmagan bo'lsa (skaner qilingan yoki rasmli PDF bo'lsa),
+    # butun faylni emas, faqat dastlabki 3-4 sahifasini ixchamlashtirib olamiz (Google payload limitidan oshmasligi uchun)
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        writer = PdfWriter()
+        for i in range(min(len(reader.pages), 4)):
+            writer.add_page(reader.pages[i])
+        buf = io.BytesIO()
+        writer.write(buf)
+        return "", buf.getvalue(), total_pages
+    except Exception:
+        if len(pdf_bytes) < 4 * 1024 * 1024:
+            return "", pdf_bytes, total_pages
+        return "", None, total_pages
+
+
 async def generate_test_from_pdf_file(
     pdf_bytes: bytes,
     api_key: str,
@@ -309,20 +394,9 @@ async def generate_test_from_pdf_file(
     custom_prompt: str = ""
 ) -> Dict[str, Any]:
     """PDF darslik yoki konspekt faylidan test tuzadi"""
-    # 1. Avval pypdf orqali matnini olamiz
-    extracted_text = ""
-    try:
-        from pypdf import PdfReader
-        import io
-        reader = PdfReader(io.BytesIO(pdf_bytes))
-        for page in reader.pages[:20]: # Dastlabki 20 sahifa
-            t = page.extract_text()
-            if t:
-                extracted_text += t + "\n"
-    except Exception:
-        pass
+    extracted_text, compact_bytes, total_pages = extract_text_from_pdf_bytes(pdf_bytes)
 
-    if len(extracted_text.strip()) > 100:
+    if extracted_text:
         return await generate_test_from_content(
             text_content=extracted_text,
             api_key=api_key,
@@ -330,22 +404,27 @@ async def generate_test_from_pdf_file(
             custom_instruction=custom_prompt
         )
 
-    # Agar matn bo'lmasa (skaner qilingan PDF bo'lsa), to'g'ridan-to'g'ri inline_data qilib uzatamiz
-    b64_data = base64.b64encode(pdf_bytes).decode("utf-8")
-    media_parts = [
-        {
-            "inline_data": {
-                "mime_type": "application/pdf",
-                "data": b64_data
+    if compact_bytes:
+        b64_data = base64.b64encode(compact_bytes).decode("utf-8")
+        media_parts = [
+            {
+                "inline_data": {
+                    "mime_type": "application/pdf",
+                    "data": b64_data
+                }
             }
-        }
-    ]
-    return await generate_test_from_content(
-        text_content=custom_prompt or "Ushbu PDF hujjatidagi mavzu asosida test tuzing.",
-        api_key=api_key,
-        question_count=question_count,
-        custom_instruction=custom_prompt,
-        media_parts=media_parts
+        ]
+        return await generate_test_from_content(
+            text_content=custom_prompt or "Ushbu PDF darslik sahifalaridagi mavzu asosida test tuzing.",
+            api_key=api_key,
+            question_count=question_count,
+            custom_instruction=custom_prompt,
+            media_parts=media_parts
+        )
+
+    raise AIGeneratorError(
+        "PDF faylidan matn ajratib bo'lmadi yoki fayl haddan tashqari katta.\n"
+        "Iltimos, PDF matnini nusxalab yuboring yoki Word (.docx) shaklida yuboring."
     )
 
 
@@ -355,25 +434,13 @@ async def generate_test_from_docx_file(
     question_count: int = 5,
     custom_prompt: str = ""
 ) -> Dict[str, Any]:
-    """Word (.docx) konspekt yoki darslik faylidan test tuzadi"""
-    import docx
-    import io
-
-    doc = docx.Document(io.BytesIO(docx_bytes))
-    paragraphs_text = []
-    for p in doc.paragraphs:
-        if p.text.strip():
-            paragraphs_text.append(p.text.strip())
-
-    for t in doc.tables:
-        for row in t.rows:
-            r_text = " | ".join([c.text.strip() for c in row.cells if c.text.strip()])
-            if r_text:
-                paragraphs_text.append(r_text)
-
-    full_text = "\n".join(paragraphs_text)
-    if not full_text.strip():
-        raise AIGeneratorError("Word fayli bo'sh yoki unda matn topilmadi.")
+    """Word (.docx, .doc) konspekt yoki darslik faylidan test tuzadi"""
+    full_text = extract_text_from_docx_bytes(docx_bytes)
+    if not full_text:
+        raise AIGeneratorError(
+            "Word faylida o'qiladigan matn topilmadi!\n"
+            "Iltimos, fayl ichida matn mavjudligini tekshiring yoki matnni botga to'g'ridan-to'g'ri xabar qilib yuboring."
+        )
 
     return await generate_test_from_content(
         text_content=full_text,

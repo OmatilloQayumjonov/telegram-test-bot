@@ -18,6 +18,8 @@ from services.ai_generator import (
     generate_test_from_image,
     generate_test_from_pdf_file,
     generate_test_from_docx_file,
+    extract_text_from_docx_bytes,
+    extract_text_from_pdf_bytes,
     AIGeneratorError
 )
 from services.excel_exporter import export_results_to_excel
@@ -285,20 +287,84 @@ async def handle_document_upload(message: Message, state: FSMContext):
         await state.clear()
 
     except (DocxParseError, PdfParseError) as e:
+        raw_bytes = file_io.getvalue()
+        extracted_text = ""
+        if is_docx:
+            try:
+                extracted_text = extract_text_from_docx_bytes(raw_bytes)
+            except Exception:
+                pass
+        else:
+            try:
+                extracted_text, _, _ = extract_text_from_pdf_bytes(raw_bytes)
+            except Exception:
+                pass
+
         safe_err = html.escape(str(e))
-        await status_msg.edit_text(
-            f"❌ <b>Faylni o'qishda xatolik yuz berdi:</b>\n\n"
-            f"{safe_err}\n\n"
-            f"Iltimos, faylni tekshirib, qayta yuboring.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+
+        if extracted_text and len(extracted_text.strip()) >= 50:
+            await state.update_data(
+                ai_material_type="text",
+                ai_media_bytes=None,
+                ai_prompt_text=extracted_text
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🤖 Aqlli AI orqali test tuzish (Avtomatik)", callback_data="ai_start_from_failed_doc")],
                 [InlineKeyboardButton(text="📄 Namuna faylni olish", callback_data="admin_get_sample")],
                 [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="admin_menu" if is_admin(user_id) else "student_menu")]
-            ]),
-            parse_mode="HTML"
-        )
+            ])
+            await status_msg.edit_text(
+                f"ℹ️ <b>Faylda tayyor test formati (1. A, B, C, D) topilmadi.</b>\n\n"
+                f"Lekin ushbu fayl matnini AI o'qiy oladi ({len(extracted_text)} ta belgi)!\n\n"
+                f"Xohlaysizmi, <b>Aqlli AI</b> ushbu fayl asosida sizga avtomatik test savollari tuzib bersin?",
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        else:
+            await status_msg.edit_text(
+                f"❌ <b>Faylni o'qishda xatolik yuz berdi:</b>\n\n"
+                f"{safe_err}\n\n"
+                f"Iltimos, faylni tekshirib, qayta yuboring.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📄 Namuna faylni olish", callback_data="admin_get_sample")],
+                    [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="admin_menu" if is_admin(user_id) else "student_menu")]
+                ]),
+                parse_mode="HTML"
+            )
     except Exception as e:
         safe_err = html.escape(str(e))
         await status_msg.edit_text(f"❌ Xatolik: {safe_err}", parse_mode="HTML")
+
+
+@router.callback_query(F.data == "ai_start_from_failed_doc")
+async def cb_ai_start_from_failed_doc(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    prompt_text = data.get("ai_prompt_text", "")
+    if not prompt_text:
+        await callback.answer("Matn topilmadi, iltimos qaytadan yuboring.", show_alert=True)
+        return
+
+    await state.set_state(AITestState.waiting_for_count)
+    text = (
+        "🤖 <b>Aqlli AI orqali test tuzish</b>\n\n"
+        f"Fayl matni muvaffaqiyatli yuklandi ({len(prompt_text)} ta belgi).\n\n"
+        "🔢 <b>Ushbu mavzu bo'yicha nechta savol tuzilsin?</b>\n"
+        "Variantlardan birini tanlang yoki xohlagan sonni yozib yuboring (masalan: <code>10</code>):"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="5 ta", callback_data="ai_count_5"),
+            InlineKeyboardButton(text="10 ta", callback_data="ai_count_10")
+        ],
+        [
+            InlineKeyboardButton(text="15 ta", callback_data="ai_count_15"),
+            InlineKeyboardButton(text="20 ta", callback_data="ai_count_20")
+        ],
+        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="ai_cancel")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
 
 
 # ==============================================================================
@@ -554,6 +620,7 @@ async def process_ai_material(message: Message, state: FSMContext, bot: Bot):
     material_type = "text"
     media_bytes = None
     prompt_text = ""
+    file_info_header = ""
 
     if message.photo:
         photo = message.photo[-1]
@@ -562,24 +629,82 @@ async def process_ai_material(message: Message, state: FSMContext, bot: Bot):
         media_bytes = file_io.getvalue()
         material_type = "photo"
         prompt_text = message.caption or ""
+        file_info_header = "📸 <b>Fotosurat qabul qilindi!</b>\n\n"
     elif message.document:
         doc = message.document
         fname = (doc.file_name or "").lower()
-        if fname.endswith(".docx"):
-            material_type = "docx"
-        elif fname.endswith(".pdf"):
-            material_type = "pdf"
-        else:
-            await message.answer("❌ Iltimos, faqat Word (.docx) yoki PDF (.pdf) formatidagi fayl yuboring!")
+
+        # Word, PDF va Text fayllarini to'liq qabul qilamiz
+        is_word = fname.endswith(".docx") or fname.endswith(".doc")
+        is_pdf = fname.endswith(".pdf")
+        is_txt = fname.endswith(".txt")
+
+        if not (is_word or is_pdf or is_txt):
+            await message.answer(
+                "❌ <b>Noto'g'ri fayl formati!</b>\n\n"
+                "Iltimos, darslik yoki konspektni quyidagi formatlarda yuboring:\n"
+                "• Word fayli: <code>.docx</code> yoki <code>.doc</code>\n"
+                "• PDF fayli: <code>.pdf</code>\n"
+                "• Matn fayli: <code>.txt</code>",
+                parse_mode="HTML"
+            )
             return
+
+        loading_msg = await message.answer("⏳ <i>Fayl qabul qilinmoqda va matni o'qilmoqda...</i>", parse_mode="HTML")
 
         file_io = io.BytesIO()
         await bot.download(doc, destination=file_io)
-        media_bytes = file_io.getvalue()
-        prompt_text = message.caption or ""
+        raw_bytes = file_io.getvalue()
+        caption_extra = (message.caption or "").strip()
+
+        if is_word:
+            extracted_text = extract_text_from_docx_bytes(raw_bytes)
+            if extracted_text:
+                material_type = "text"
+                prompt_text = (caption_extra + "\n\n" + extracted_text).strip()
+                file_info_header = f"📄 <b>Word fayli muvaffaqiyatli o'qildi!</b>\n<i>Fayl: {html.escape(doc.file_name or 'Word')} ({len(extracted_text)} ta belgi)</i>\n\n"
+            else:
+                material_type = "docx"
+                media_bytes = raw_bytes
+                prompt_text = caption_extra
+                file_info_header = f"📄 <b>Word fayli qabul qilindi!</b>\n\n"
+
+        elif is_pdf:
+            extracted_text, compact_pdf, total_pages = extract_text_from_pdf_bytes(raw_bytes)
+            if extracted_text:
+                material_type = "text"
+                prompt_text = (caption_extra + "\n\n" + extracted_text).strip()
+                page_txt = f"{total_pages} sahifa, " if total_pages else ""
+                file_info_header = f"📑 <b>PDF darslik muvaffaqiyatli o'qildi!</b>\n<i>Fayl: {html.escape(doc.file_name or 'PDF')} ({page_txt}{len(extracted_text)} ta belgi)</i>\n\n"
+            elif compact_pdf:
+                material_type = "pdf"
+                media_bytes = compact_pdf
+                prompt_text = caption_extra
+                file_info_header = f"📑 <b>PDF darslik qabul qilindi!</b>\n\n"
+            else:
+                material_type = "pdf"
+                media_bytes = raw_bytes
+                prompt_text = caption_extra
+                file_info_header = f"📑 <b>PDF darslik qabul qilindi!</b>\n\n"
+
+        elif is_txt:
+            try:
+                extracted_text = raw_bytes.decode("utf-8")
+            except Exception:
+                extracted_text = raw_bytes.decode("latin1", errors="ignore")
+            material_type = "text"
+            prompt_text = (caption_extra + "\n\n" + extracted_text).strip()
+            file_info_header = f"📝 <b>Matn fayli muvaffaqiyatli o'qildi!</b>\n\n"
+
+        try:
+            await loading_msg.delete()
+        except Exception:
+            pass
+
     elif message.text:
         material_type = "text"
         prompt_text = message.text
+        file_info_header = "📝 <b>Mavzu/Matn qabul qilindi!</b>\n\n"
 
     await state.update_data(
         ai_material_type=material_type,
@@ -589,6 +714,7 @@ async def process_ai_material(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(AITestState.waiting_for_count)
 
     text = (
+        f"{file_info_header}"
         "🔢 <b>Testda nechta savol bo'lishini xohlaysiz?</b>\n\n"
         "Quyidagi variantlardan birini tanlang yoki xohlagan soningizni yozib yuboring (masalan: <code>7</code>):"
     )
@@ -639,8 +765,8 @@ async def run_ai_test_generation(event: Message, state: FSMContext, count: int, 
         return
 
     wait_text = (
-        f"⏳ <b>Aqlli AI tizimi ma'lumotlarni tahlil qilib, {count} ta test tuzmoqda...</b>\n\n"
-        "<i>Iltimos kuting (10-20 soniya)...</i>"
+        f"⏳ <b>Aqlli AI tizimi testlarni tuzmoqda ({count} ta savol)...</b>\n\n"
+        "<i>Iltimos kuting (1-3 soniyada tayyor bo'ladi)...</i>"
     )
     if is_callback:
         status_msg = await event.edit_text(wait_text, parse_mode="HTML")
