@@ -12,15 +12,14 @@ class AIGeneratorError(Exception):
     pass
 
 
-# Barqaror, yuqori o'tkazuvchanlikka ega va tezkor rasmiy modellar zanjiri
+# 2026-yilning eng barqaror, tezkor va rasmiy modellar zanjiri
 MODELS_TO_TRY = [
-    "gemini-2.5-flash",      # Eng tezkor va aqlli (thinkingBudget=0 bilan 1.5-2.5 soniya)
-    "gemini-2.0-flash",      # Rasmiy yuqori tezlikdagi production model
-    "gemini-2.0-flash-lite", # Ultra yengil va eng kam yuklamaga ega model
-    "gemini-1.5-flash",      # Katta kvotaga ega, 99.99% barqaror model
-    "gemini-1.5-flash-8b",   # Zaxira yengil model
-    "gemini-2.5-pro",        # Yuqori mantiqiy zaxira model
-    "gemini-1.5-pro"         # Yakuniy zaxira model
+    "gemini-2.5-flash",      # 1-darajali: Eng tezkor va zamonaviy (thinkingBudget=0 bilan 1.5-2 soniya)
+    "gemini-2.5-flash-lite", # 2-darajali: Ultra yengil va deyarli xatoliksiz tezkor model
+    "gemini-2.0-flash",      # 3-darajali: Rasmiy barqaror production model
+    "gemini-1.5-flash",      # 4-darajali: Katta kvotali zaxira model
+    "gemini-2.5-pro",        # 5-darajali: Yuqori mantiqiy chuqur model (dynamic thinking)
+    "gemini-1.5-pro"         # 6-darajali: Yakuniy mustahkam zaxira model
 ]
 
 SYSTEM_INSTRUCTION = (
@@ -50,43 +49,71 @@ def _clean_json_text(raw_text: str) -> str:
 async def _call_gemini_api(payload: dict, api_key: str) -> dict:
     if not api_key:
         raise AIGeneratorError(
-            "AI API kaliti kiritilmagan!\n"
-            "Iltimos, administratorga murojaat qiling yoki Admin Panelidagi sozlamalardan API kalitni kiriting."
+            "AI API kaliti kiritilmagan!\n\n"
+            "Iltimos, administrator paneli orqali (yoki /admin -> '🔑 AI API kalitini sozlash' bo'limidan) "
+            "Google AI Studio (aistudio.google.com) dan olingan bepul API kalitni kiriting."
         )
 
     last_error = ""
-    timeout = aiohttp.ClientTimeout(total=28, connect=8)
+    had_quota_error = False
+    timeout = aiohttp.ClientTimeout(total=18, connect=6)
 
-    # 3 bosqichli avtomatik qayta urinish (eng barqaror modellar bo'ylab)
-    for cycle in range(3):
+    # 2 tsikl davomida eng tezkor va barqaror modellar bo'ylab harakatlanamiz
+    for cycle in range(2):
         for model_name in MODELS_TO_TRY:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
 
-            # Faqat 2.5 modellarida tezlikni maksimal qilish uchun thinking ni 0 qilamiz
             model_payload = json.loads(json.dumps(payload))
-            if "2.5" in model_name and "generationConfig" in model_payload:
+            if "generationConfig" not in model_payload:
+                model_payload["generationConfig"] = {}
+
+            # Faqat 2.5-flash va 2.5-flash-lite modellarida tezlikni 1-2 soniyaga tushirish uchun thinking ni 0 qilamiz
+            if "2.5-flash" in model_name:
                 model_payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+            elif "2.5-pro" in model_name:
+                # 2.5-pro thinkingBudget=0 ni qabul qilmaydi (faqat dynamic yoki >128), shuning uchun dynamic qilamiz
+                model_payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": -1}
             else:
-                # Boshqa modellarda thinkingConfig bo'lsa xatolik (400) beradi, shuning uchun olib tashlanadi
-                if "generationConfig" in model_payload and "thinkingConfig" in model_payload["generationConfig"]:
+                # 2.0 va 1.5 modellarida thinkingConfig bo'lmasligi kerak
+                if "thinkingConfig" in model_payload["generationConfig"]:
                     del model_payload["generationConfig"]["thinkingConfig"]
 
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.post(url, json=model_payload) as resp:
                         status = resp.status
-                        data = await resp.json()
+                        try:
+                            data = await resp.json()
+                        except Exception:
+                            data = {}
 
                         if status != 200:
                             err_msg = "Noma'lum xatolik"
                             if isinstance(data, dict) and "error" in data:
                                 err_msg = data["error"].get("message", str(data["error"]))
 
-                            # Agar API kalit mutlaqo yaroqsiz bo'lsa (400 API_KEY_INVALID)
+                            # 1. Agar API kalit butunlay yaroqsiz bo'lsa (400 API_KEY_INVALID)
                             if "API key not valid" in err_msg or (status == 400 and "API_KEY_INVALID" in err_msg):
-                                raise AIGeneratorError("Kiritilgan AI API kaliti yaroqsiz! Iltimos, sozlamalardan to'g'ri kalitni kiriting.")
+                                raise AIGeneratorError(
+                                    "Kiritilgan AI API kaliti yaroqsiz!\n"
+                                    "Iltimos, aistudio.google.com saytidan bepul yangi kalit olib, "
+                                    "bot sozlamalaridan qayta kiriting."
+                                )
 
-                            # Agar model thinkingConfig ni qabul qilmasa (400), darhol ushbu modelni thinkingConfigsiz sinaymiz
+                            # 2. Ruxsat cheklangan bo'lsa (403 Forbidden)
+                            if status == 403:
+                                raise AIGeneratorError(
+                                    "AI API kalitida ruxsat cheklovi (403) mavjud.\n"
+                                    "Iltimos, Google Cloud yoki AI Studio konsolida 'Generative Language API' yoqilganligini tekshiring."
+                                )
+
+                            # 3. 429 Quota Exceeded (Rate limit)
+                            if status == 429:
+                                had_quota_error = True
+                                last_error = "So'rovlar limiti (kvota) to'ldi (429)"
+                                continue
+
+                            # 4. Agar model thinkingConfig ni qabul qilmasa (400), thinkingConfigsiz qayta sinaymiz
                             if status == 400 and ("thinking" in err_msg.lower() or "unknown field" in err_msg.lower()):
                                 plain_payload = json.loads(json.dumps(payload))
                                 if "generationConfig" in plain_payload and "thinkingConfig" in plain_payload["generationConfig"]:
@@ -101,20 +128,19 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
                                                 raw_json = parts[0].get("text", "")
                                                 return json.loads(_clean_json_text(raw_json))
 
-                            # 503 (High demand), 429 (Rate limit), 404, 500, 502, 504 holatlarida
-                            # to'xtamasdan DARHOL keyingi barqaror modelga o'tamiz
-                            last_error = f"{err_msg} ({status})"
+                            # 503, 500, 502, 504 yoki boshqa holatda darhol keyingi modelga o'tamiz
+                            last_error = f"{model_name}: {err_msg} ({status})"
                             continue
 
                         # Muvaffaqiyatli 200 javob
                         candidates = data.get("candidates", [])
                         if not candidates:
-                            last_error = "Bo'sh javob keldi"
+                            last_error = f"{model_name}: Bo'sh javob"
                             continue
 
                         content_parts = candidates[0].get("content", {}).get("parts", [])
                         if not content_parts:
-                            last_error = "Javobda matn topilmadi"
+                            last_error = f"{model_name}: Javobda matn topilmadi"
                             continue
 
                         raw_json = content_parts[0].get("text", "")
@@ -124,23 +150,28 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
                             parsed = json.loads(cleaned)
                             return parsed
                         except json.JSONDecodeError:
-                            # Agar model JSON formatida xatoga yo'l qo'ygan bo'lsa, keyingi modelga o'tamiz
-                            last_error = "JSON format xatoligi"
+                            last_error = f"{model_name}: JSON format xatoligi"
                             continue
 
             except (aiohttp.ClientError, asyncio.TimeoutError):
-                last_error = "Tarmoq ulanishida uzilish"
+                last_error = f"{model_name}: Tarmoq ulanishida uzilish (Timeout)"
                 continue
 
-        # Agar birinchi tsiklda barcha modellar band bo'lsa, biroz kutib qayta urinadi
+        # Har bir tsikl oralig'ida qisqa tanaffus
         if cycle == 0:
-            await asyncio.sleep(0.5)
-        elif cycle == 1:
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.3)
+
+    if had_quota_error:
+        raise AIGeneratorError(
+            "AI so'rovlar limiti (kvotasi) to'ldi!\n\n"
+            "Google bepul API kalit uchun daqiqalik cheklov qo'ygan. "
+            "Iltimos, 1 daqiqa kutib qayta urinib ko'ring yoki aistudio.google.com dan yangi bepul kalit oling."
+        )
 
     raise AIGeneratorError(
-        "AI xizmatida vaqtinchalik yuqori yuklama yuzaga keldi.\n"
-        "Iltimos, bir necha soniyadan so'ng qayta urinib ko'ring yoki boshqa material yuboring."
+        f"AI xizmatida vaqtinchalik uzilish yuzaga keldi.\n"
+        f"Sababi: {last_error or 'Server yuklamasi yuqori'}.\n\n"
+        "Iltimos, bir necha soniyadan so'ng qayta urinib ko'ring."
     )
 
 

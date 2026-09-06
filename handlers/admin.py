@@ -687,8 +687,7 @@ async def run_ai_test_generation(event: Message, state: FSMContext, count: int, 
     except AIGeneratorError as ge:
         safe_err = html.escape(str(ge))
         await status_msg.edit_text(
-            f"❌ <b>AI xatoligi:</b>\n\n{safe_err}\n\n"
-            "Iltimos, qayta urinib ko'ring yoki boshqa material yuboring.",
+            f"❌ <b>AI xatoligi:</b>\n\n{safe_err}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="student_menu")]
             ]),

@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Xavfsizlik: Bot tokeni ochiq koddan olib tashlandi, .env orqali xavfsiz qilindi"
+git commit -m "AI generatsiyasi 2026-yilning 6 ta eng tezkor va barqaror modellari bilan optimallashtirildi, xatoliklar aniqlandi"
 git push origin main
 
 echo.

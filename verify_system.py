@@ -175,11 +175,13 @@ async def run_verification():
     assert validated_ai["questions"][0]["correct_option"] == "A"
     print("   [OK] AI Test validatsiya tizimi to'g'ri ishladi")
 
-    # Gemini API kalitini saqlash va olish
-    await db.set_setting("gemini_api_key", "AIzaSyTest_1234567890abcdef")
+    # AI API kalitini saqlash va olish tekshiruvi (haqiqiy kalitni saqlab qolgan holda)
+    original_key = await db.get_setting("gemini_api_key", "")
+    await db.set_setting("gemini_api_key", "test_verification_key_check")
     saved_key = await db.get_setting("gemini_api_key")
-    assert saved_key == "AIzaSyTest_1234567890abcdef"
-    print("   [OK] Gemini API kaliti bazaga muvaffaqiyatli saqlandi va o'qildi")
+    assert saved_key == "test_verification_key_check"
+    await db.set_setting("gemini_api_key", original_key)
+    print("   [OK] AI API kaliti bazaga muvaffaqiyatli saqlandi va o'qildi")
 
     print("\n" + "=" * 60)
     print("BARCHA TEKSHIRUVLAR MUVAFFAQIYATLI O'TDI! (ALL TESTS PASSED)")
