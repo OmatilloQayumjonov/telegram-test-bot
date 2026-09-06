@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Telefon funksiyasi olib tashlandi, Telegram ID orqali profilga kirish va bot orqali xabar yozish qoldirildi"
+git commit -m "Talabaga o'qituvchining telegram profili tugmasi olib tashlandi, faqat bot orqali javob yozish qoldirildi"
 git push origin main
 
 echo.

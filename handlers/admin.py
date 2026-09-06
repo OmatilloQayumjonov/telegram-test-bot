@@ -1246,14 +1246,10 @@ async def process_teacher_message_to_student(message: Message, state: FSMContext
         return
 
     teacher_name = html.escape(message.from_user.full_name or "O'qituvchi")
-    teacher_uname = message.from_user.username
 
     student_kb_rows = [
         [InlineKeyboardButton(text="✍️ O'qituvchiga javob yozish", callback_data=f"reply_teacher_{message.from_user.id}")]
     ]
-    if teacher_uname:
-        student_kb_rows.append([InlineKeyboardButton(text="👤 O'qituvchining Telegram profili", url=f"https://t.me/{teacher_uname}")])
-
     st_kb = InlineKeyboardMarkup(inline_keyboard=student_kb_rows)
 
     header_text = (
