@@ -47,7 +47,7 @@ Quyidagi maydonlarni to'ldiring:
 ## 4-qadam: Maxfiy Kalitlar (Environment Variables)
 
 Pastdagi **"Environment Variables"** bo'limida quyidagi o'zgaruvchilarni kiriting:
-1. `BOT_TOKEN` = `8970837149:AAGb7EhM3tkWz1SRP2PjNV8Hwc0rNHQAJ8M`
+1. `BOT_TOKEN` = `@BotFather bergan maxfiy bot tokeningiz`
 2. `ADMIN_IDS` = `1184083915`
 3. `DATABASE_PATH` = `data/bot.db`
 4. `PYTHON_VERSION` = `3.11.9`

@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Tugmachalar qotib qolishi va ishlamay qolish muammosi to'liq hal qilindi (StateFilter, universal middleware va stale callback himoyasi)"
+git commit -m "Xavfsizlik: Bot tokeni ochiq koddan olib tashlandi, .env orqali xavfsiz qilindi"
 git push origin main
 
 echo.
