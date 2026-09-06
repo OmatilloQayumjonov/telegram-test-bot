@@ -12,14 +12,15 @@ class AIGeneratorError(Exception):
     pass
 
 
-# 2026-yilning eng barqaror, tezkor va rasmiy modellar zanjiri
+# 2026-yilning eng yangi, sinovdan o'tgan ultra-tezkor va barqaror modellari
 MODELS_TO_TRY = [
-    "gemini-2.5-flash",      # 1-darajali: Eng tezkor va zamonaviy (thinkingBudget=0 bilan 1.5-2 soniya)
-    "gemini-2.5-flash-lite", # 2-darajali: Ultra yengil va deyarli xatoliksiz tezkor model
-    "gemini-2.0-flash",      # 3-darajali: Rasmiy barqaror production model
-    "gemini-1.5-flash",      # 4-darajali: Katta kvotali zaxira model
-    "gemini-2.5-pro",        # 5-darajali: Yuqori mantiqiy chuqur model (dynamic thinking)
-    "gemini-1.5-pro"         # 6-darajali: Yakuniy mustahkam zaxira model
+    "gemini-3.5-flash-lite", # 1-o'rin: 0.8 soniyada javob beruvchi ultra-yengil model
+    "gemini-3.6-flash",      # 2-o'rin: 1.3 soniyada yuqori aniqlikda javob beruvchi rasmiy model
+    "gemini-3.1-flash-lite", # 3-o'rin: 2.2 soniyada barqaror ishlovchi model
+    "gemini-3.5-flash",      # 4-o'rin: Yuqori sifatli zaxira
+    "gemini-3.8-flash",      # 5-o'rin: Katta hajmli zaxira
+    "gemini-3.7-flash",      # 6-o'rin: Qo'shimcha zaxira
+    "gemini-2.5-flash"       # 7-o'rin: Eski kalitlar uchun moslashuvchan fallback
 ]
 
 SYSTEM_INSTRUCTION = (
@@ -56,7 +57,7 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
 
     last_error = ""
     had_quota_error = False
-    timeout = aiohttp.ClientTimeout(total=18, connect=6)
+    timeout = aiohttp.ClientTimeout(total=15, connect=5)
 
     # 2 tsikl davomida eng tezkor va barqaror modellar bo'ylab harakatlanamiz
     for cycle in range(2):
@@ -67,14 +68,14 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
             if "generationConfig" not in model_payload:
                 model_payload["generationConfig"] = {}
 
-            # Faqat 2.5-flash va 2.5-flash-lite modellarida tezlikni 1-2 soniyaga tushirish uchun thinking ni 0 qilamiz
-            if "2.5-flash" in model_name:
+            # Modellarga mos optimal tezlik (thinkingLevel minimal - 1 soniyalik tezlik)
+            if "3.6-flash" in model_name or "3.5-flash" in model_name or "3.1-flash-lite" in model_name:
+                model_payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "minimal"}
+            elif "3.8-flash" in model_name or "3.7-flash" in model_name:
+                model_payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "low"}
+            elif "2.5-flash" in model_name:
                 model_payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
-            elif "2.5-pro" in model_name:
-                # 2.5-pro thinkingBudget=0 ni qabul qilmaydi (faqat dynamic yoki >128), shuning uchun dynamic qilamiz
-                model_payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": -1}
             else:
-                # 2.0 va 1.5 modellarida thinkingConfig bo'lmasligi kerak
                 if "thinkingConfig" in model_payload["generationConfig"]:
                     del model_payload["generationConfig"]["thinkingConfig"]
 

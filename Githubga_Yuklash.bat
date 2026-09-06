@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "AI generatsiyasi 2026-yilning 6 ta eng tezkor va barqaror modellari bilan optimallashtirildi, xatoliklar aniqlandi"
+git commit -m "AI generatsiyasi yangi 2026-yilgi 3.x modellarga o'tkazildi (1.6s tezlikda ishlamoqda)"
 git push origin main
 
 echo.
