@@ -48,7 +48,8 @@ async def init_db():
         default_settings = [
             ("price_month", "30000"),
             ("price_year", "250000"),
-            ("click_details", "8600 0000 0000 0000 (Click)")
+            ("click_details", "8600 0000 0000 0000 (Click)"),
+            ("gemini_api_key", "")
         ]
         for k, v in default_settings:
             await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

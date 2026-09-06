@@ -5,6 +5,8 @@ modules = [
     "config",
     "database.db",
     "services.docx_parser",
+    "services.pdf_parser",
+    "services.ai_generator",
     "services.excel_exporter",
     "utils.sample_doc",
     "keyboards",

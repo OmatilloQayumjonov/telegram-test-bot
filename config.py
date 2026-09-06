@@ -22,3 +22,6 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_FULL_PATH = BASE_DIR / DATABASE_PATH
 DB_FULL_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# Google Gemini AI API kaliti (.env yoki ma'lumotlar bazasi orqali olinadi)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()

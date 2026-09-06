@@ -39,7 +39,8 @@ async def run_verification():
     print(f"   [OK] Talaba ismi muvaffaqiyatli tahrirlandi: {student['full_name']}")
 
     # O'qituvchi bepul urinishlari (3 ta)
-    dummy_teacher_id = 888001
+    import time
+    dummy_teacher_id = 888000 + int(time.time() % 5000)
     can_up, reason, _ = await db.can_teacher_create_test(dummy_teacher_id)
     assert can_up is True and reason == "free"
     print("   [OK] O'qituvchiga dastlabki 3 ta bepul urinish tasdiqlandi")
@@ -91,6 +92,81 @@ async def run_verification():
     excel_path = export_results_to_excel(results, "data/test_natijalari_test.xlsx")
     assert os.path.exists(excel_path), "Excel fayli yaratilmadi!"
     print(f"   [OK] Excel fayl muvaffaqiyatli saqlandi: {excel_path}")
+
+    # 5. Qo'lda savol kiritish (Manual parsing) tekshiruvi
+    print("\n5. Qo'lda kiritilgan savollarni (Matn + Rasm) tahlil qilish tekshiruvi...")
+    from services.pdf_parser import parse_single_question_text
+    
+    # Oddiy matnli savol
+    text_q_raw = (
+        "O'zbekiston Respublikasi Konstitutsiyasi qachon qabul qilingan?\n"
+        "A) 1991-yil 1-sentabr\n"
+        "B) 1992-yil 8-dekabr\n"
+        "C) 1993-yil 2-iyul\n"
+        "D) 1994-yil 1-iyul\n"
+        "Javob: B\n"
+        "Izoh: 1992-yil 8-dekabrda qabul qilingan."
+    )
+    manual_q1 = parse_single_question_text(text_q_raw)
+    assert manual_q1["correct_option"] == "B"
+    assert manual_q1["option_a"] == "1991-yil 1-sentabr"
+    print("   [OK] Oddiy matnli savol tahlili muvaffaqiyatli o'tdi")
+
+    # Rasmli savol
+    photo_q_raw = (
+        "Rasmda tasvirlangan burchak turi qaysi?\n"
+        "A) O'tkir burchak\n"
+        "B) To'g'ri burchak\n"
+        "C) O'tmas burchak\n"
+        "D) Yoyiq burchak\n"
+        "*B) To'g'ri burchak\n"
+    )
+    dummy_img = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRgeom"
+    manual_q2 = parse_single_question_text(photo_q_raw, image_bytes=dummy_img, image_ext="png")
+    assert manual_q2["correct_option"] == "B"
+    assert manual_q2["image_bytes"] == dummy_img
+    print("   [OK] Rasmli savol (foto + izoh) tahlili muvaffaqiyatli o'tdi")
+
+    # Qo'lda kiritilgan savollarni bazaga saqlash
+    manual_test_id = await db.add_test(
+        title="Qo'lda kiritilgan Matematika testi",
+        author_id=dummy_teacher_id,
+        questions=[manual_q1, manual_q2],
+        time_limit_minutes=15
+    )
+    assert manual_test_id > 0
+    print(f"   [OK] Qo'lda kiritilgan test bazaga saqlandi (ID: #{manual_test_id})")
+
+    # 6. AI Generator moduli va Gemini kaliti tekshiruvi
+    print("\n6. AI Generator moduli va Gemini sozlamalari tekshiruvi...")
+    from services.ai_generator import _validate_ai_test, _clean_json_text
+
+    # JSON tozalash va validatsiya
+    raw_ai_json = {
+        "title": "Fizika Nyuton qonunlari",
+        "questions": [
+            {
+                "question_text": "Nyutonning birinchi qonuni nima deb ataladi?",
+                "option_a": "Inersiya qonuni",
+                "option_b": "Gravitatsiya qonuni",
+                "option_c": "Impuls qonuni",
+                "option_d": "Termodinamika qonuni",
+                "correct_option": "A",
+                "explanation": "Tashqi kuch ta'sir etmaguncha jism o'z holatini saqlaydi."
+            }
+        ]
+    }
+    validated_ai = _validate_ai_test(raw_ai_json)
+    assert validated_ai["title"] == "Fizika Nyuton qonunlari"
+    assert len(validated_ai["questions"]) == 1
+    assert validated_ai["questions"][0]["correct_option"] == "A"
+    print("   [OK] AI Test validatsiya tizimi to'g'ri ishladi")
+
+    # Gemini API kalitini saqlash va olish
+    await db.set_setting("gemini_api_key", "AIzaSyTest_1234567890abcdef")
+    saved_key = await db.get_setting("gemini_api_key")
+    assert saved_key == "AIzaSyTest_1234567890abcdef"
+    print("   [OK] Gemini API kaliti bazaga muvaffaqiyatli saqlandi va o'qildi")
 
     print("\n" + "=" * 60)
     print("BARCHA TEKSHIRUVLAR MUVAFFAQIYATLI O'TDI! (ALL TESTS PASSED)")

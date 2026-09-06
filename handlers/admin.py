@@ -9,8 +9,17 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from config import ADMIN_IDS
+import config
 from database import db
 from services.docx_parser import parse_docx_test, DocxParseError
+from services.pdf_parser import parse_pdf_test, parse_single_question_text, PdfParseError
+from services.ai_generator import (
+    generate_test_from_content,
+    generate_test_from_image,
+    generate_test_from_pdf_file,
+    generate_test_from_docx_file,
+    AIGeneratorError
+)
 from services.excel_exporter import export_results_to_excel
 from utils.sample_doc import create_sample_docx
 import os
@@ -18,23 +27,35 @@ import io
 import html
 import urllib.parse
 
+from keyboards import get_admin_reply_keyboard, get_student_reply_keyboard, get_admin_inline_keyboard, get_test_creation_keyboard
+
 router = Router()
 
 
 class AdminState(StatesGroup):
     waiting_for_docx = State()
+    waiting_for_pdf = State()
     waiting_for_month_price = State()
     waiting_for_year_price = State()
     waiting_for_click_details = State()
     waiting_for_grant_uid = State()
     waiting_for_grant_days = State()
+    waiting_for_gemini_key = State()
+
+
+class ManualTestState(StatesGroup):
+    waiting_for_title = State()
+    waiting_for_question = State()
+
+
+class AITestState(StatesGroup):
+    waiting_for_material = State()
+    waiting_for_count = State()
+    waiting_for_confirm = State()
 
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS or len(ADMIN_IDS) == 0
-
-
-from keyboards import get_admin_reply_keyboard, get_student_reply_keyboard, get_admin_inline_keyboard
 
 
 
@@ -92,18 +113,64 @@ async def cb_upload_test(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    await state.set_state(AdminState.waiting_for_docx)
+    back_cb = "admin_menu" if is_admin(user_id) else "teacher_cabinet"
     await callback.message.edit_text(
-        "📥 <b>Word (.docx) formatdagi test faylini yuboring</b>\n\n"
+        "📥 <b>Yangi test yaratish / yuklash usulini tanlang:</b>\n\n"
+        "1️⃣ <b>Word (.docx) fayl</b> — Tayyor Word test faylini yuklash\n"
+        "2️⃣ <b>PDF (.pdf) fayl</b> — PDF formatidagi test faylini yuklash (rasmlari bilan)\n"
+        "3️⃣ <b>✍️ Botda qo'lda kiritish</b> — Savol matni yoki rasmini bittalab botga yuborish\n"
+        "4️⃣ <b>🤖 AI Test Yaratuvchi</b> — Darslik matni, fotosurat, Word yoki PDF konspekt asosida AI ga test tuzdirish\n\n"
+        "Qaysi usuldan foydalanasiz?",
+        reply_markup=get_test_creation_keyboard(back_cb),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "create_test_docx")
+async def cb_create_test_docx(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    can_upload, _, _ = await db.can_teacher_create_test(user_id)
+    if not can_upload:
+        await callback.answer("Obuna talab qilinadi", show_alert=True)
+        return
+    await state.set_state(AdminState.waiting_for_docx)
+    back_cb = "admin_upload_test" if is_admin(user_id) else "teacher_upload_test"
+    await callback.message.edit_text(
+        "📥 <b>Word (.docx) formatdagi test faylini yuboring:</b>\n\n"
         "<b>Eslatma:</b>\n"
         "• Har bir savol raqam bilan boshlanishi (1. ...)\n"
         "• Variantlar A) B) C) D) ko'rinishida bo'lishi\n"
         "• Har bir savol ostida to'g'ri javob ko'rsatilishi (masalan: <code>Javob: B</code> yoki <code>*B)</code>)\n"
-        "• Izoh ko'rsatilishi mumkin (<code>Izoh: ...</code>)\n\n"
-        "Faylni yuboring:",
+        "• Savol ichida rasm yoki jadval bo'lsa, avtomatik saqlanadi!\n\n"
+        "Word (.docx) faylni kutyapman...",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📄 Namuna faylni olish", callback_data="admin_get_sample")],
-            [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="admin_menu" if is_admin(user_id) else "teacher_cabinet")]
+            [InlineKeyboardButton(text="🔙 Orqaga", callback_data=back_cb)]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "create_test_pdf")
+async def cb_create_test_pdf(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    can_upload, _, _ = await db.can_teacher_create_test(user_id)
+    if not can_upload:
+        await callback.answer("Obuna talab qilinadi", show_alert=True)
+        return
+    await state.set_state(AdminState.waiting_for_pdf)
+    back_cb = "admin_upload_test" if is_admin(user_id) else "teacher_upload_test"
+    await callback.message.edit_text(
+        "📑 <b>PDF (.pdf) formatdagi test faylini yuboring:</b>\n\n"
+        "<b>Eslatma:</b>\n"
+        "• PDF ichida savollar 1., 2. tarzida, variantlar A), B), C), D) bo'lishi lozim\n"
+        "• To'g'ri javoblar savol ostida <code>Javob: A</code> yoki variant oldida <code>*A)</code> shaklida bo'lishi kerak\n"
+        "• PDF sahifasidagi rasmlar avtomatik tarzda savollarga biriktiriladi!\n\n"
+        "PDF (.pdf) faylni kutyapman...",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Orqaga", callback_data=back_cb)]
         ]),
         parse_mode="HTML"
     )
@@ -125,13 +192,22 @@ async def cb_get_sample(callback: CallbackQuery):
 
 
 @router.message(F.document, AdminState.waiting_for_docx)
+@router.message(F.document, AdminState.waiting_for_pdf)
 @router.message(F.document)
-async def handle_docx_upload(message: Message, state: FSMContext):
+async def handle_document_upload(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    # Agar AI rejimida fayl kutayotgan bo'lsa, bu handler uni o'zlashtirib olmasin
+    if current_state == AITestState.waiting_for_material.state:
+        return
+
     user_id = message.from_user.id
     doc = message.document
+    file_name = (doc.file_name or "").lower()
+    is_docx = file_name.endswith(".docx")
+    is_pdf = file_name.endswith(".pdf")
 
-    if not doc.file_name.lower().endswith(".docx"):
-        await message.answer("❌ Iltimos, faqat <b>.docx</b> (Microsoft Word) formatidagi fayl yuboring!", parse_mode="HTML")
+    if not (is_docx or is_pdf):
+        await message.answer("❌ Iltimos, faqat <b>.docx</b> (Word) yoki <b>.pdf</b> (PDF) formatidagi test faylini yuboring!", parse_mode="HTML")
         return
 
     # Obuna va ruxsatni tekshirish
@@ -162,7 +238,11 @@ async def handle_docx_upload(message: Message, state: FSMContext):
         file_io.seek(0)
 
         default_title = doc.file_name.rsplit(".", 1)[0].replace("_", " ")
-        parsed = parse_docx_test(file_io, default_title=default_title)
+        if is_docx:
+            parsed = parse_docx_test(file_io, default_title=default_title)
+        else:
+            parsed = parse_pdf_test(file_io, default_title=default_title)
+
         title = parsed["title"]
         questions = parsed["questions"]
 
@@ -196,7 +276,7 @@ async def handle_docx_upload(message: Message, state: FSMContext):
         )
         await state.clear()
 
-    except DocxParseError as e:
+    except (DocxParseError, PdfParseError) as e:
         safe_err = html.escape(str(e))
         await status_msg.edit_text(
             f"❌ <b>Faylni o'qishda xatolik yuz berdi:</b>\n\n"
@@ -211,6 +291,415 @@ async def handle_docx_upload(message: Message, state: FSMContext):
     except Exception as e:
         safe_err = html.escape(str(e))
         await status_msg.edit_text(f"❌ Xatolik: {safe_err}", parse_mode="HTML")
+
+
+# ==============================================================================
+# ✍️ BOTDA QO'LDA TEST TUZISH (MATN VA RASM)
+# ==============================================================================
+
+@router.callback_query(F.data == "create_test_manual")
+async def cb_create_test_manual(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    can_upload, _, _ = await db.can_teacher_create_test(user_id)
+    if not can_upload:
+        await callback.answer("Obuna talab qilinadi", show_alert=True)
+        return
+    await state.set_state(ManualTestState.waiting_for_title)
+    back_cb = "admin_upload_test" if is_admin(user_id) else "teacher_upload_test"
+    await callback.message.edit_text(
+        "✍️ <b>Botda qo'lda yangi test tuzish</b>\n\n"
+        "Dastlab test nomini (sarlavhasini) kiriting:\n"
+        "Masalan: <i>Biologiya 8-sinf Genetika</i>\n\n"
+        "Nomni yuboring:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data=back_cb)]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(ManualTestState.waiting_for_title)
+async def process_manual_test_title(message: Message, state: FSMContext):
+    title = message.text.strip()
+    if len(title) < 3:
+        await message.answer("⚠️ Test nomi juda qisqa. Kamida 3 ta harfdan iborat nom kiriting:")
+        return
+
+    await state.update_data(manual_title=title, manual_questions=[])
+    await state.set_state(ManualTestState.waiting_for_question)
+
+    safe_title = html.escape(title)
+    text = (
+        f"📝 <b>Test nomi:</b> {safe_title}\n"
+        f"🔢 <b>Kiritilgan savollar:</b> 0 ta\n\n"
+        "<b>Savolni quyidagi shakllardan birida yuboring:</b>\n"
+        "1️⃣ <b>Matnli savol:</b> Savol matni, variantlar va to'g'ri javobni bitta xabarda yozing;\n"
+        "2️⃣ <b>Rasmli savol:</b> Rasm (foto) yuboring va uning izohiga (caption) savol hamda variantlarni yozing!\n\n"
+        "<i>💡 Namuna:\n"
+        "O'zbekiston poytaxti qaysi shahar?\n"
+        "A) Samarqand\n"
+        "B) Buxoro\n"
+        "C) Toshkent\n"
+        "D) Xiva\n"
+        "Javob: C\n"
+        "Izoh: 1930-yildan buyon poytaxt.</i>\n\n"
+        "Savolni yuboring:"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="manual_cancel_test")]
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(ManualTestState.waiting_for_question, F.photo)
+@router.message(ManualTestState.waiting_for_question, F.text)
+async def process_manual_question(message: Message, state: FSMContext, bot: Bot):
+    img_bytes = None
+    raw_text = ""
+
+    if message.photo:
+        photo = message.photo[-1]
+        file_io = io.BytesIO()
+        await bot.download(photo, destination=file_io)
+        img_bytes = file_io.getvalue()
+        raw_text = message.caption or ""
+    elif message.text:
+        raw_text = message.text
+
+    try:
+        parsed_q = parse_single_question_text(raw_text, image_bytes=img_bytes)
+    except PdfParseError as e:
+        await message.answer(
+            f"❌ <b>Savolni qabul qilib bo'lmadi:</b>\n\n"
+            f"{html.escape(str(e))}\n\n"
+            "Iltimos, namunaga qarab savol, variantlar (A, B, C, D) va to'g'ri javobni qayta yuboring:",
+            parse_mode="HTML"
+        )
+        return
+
+    data = await state.get_data()
+    questions = data.get("manual_questions", [])
+    questions.append(parsed_q)
+    await state.update_data(manual_questions=questions)
+
+    q_count = len(questions)
+    img_tag = "🖼 Rasm: Bor ✅\n" if img_bytes else ""
+    safe_q_preview = html.escape(parsed_q['question_text'][:70])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ Testni yakunlash va saqlash ({q_count} ta savol)", callback_data="manual_finish_test")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="manual_cancel_test")]
+    ])
+
+    await message.answer(
+        f"✅ <b>{q_count}-savol muvaffaqiyatli qabul qilindi!</b>\n\n"
+        f"❓ {safe_q_preview}...\n"
+        f"{img_tag}"
+        f"👉 To'g'ri javob: <b>{parsed_q['correct_option']}</b>\n\n"
+        f"<i>Keyingi savolni yuboring yoki quyidagi tugma orqali testni yakunlang:</i>",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "manual_finish_test")
+async def cb_finish_manual_test(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    questions = data.get("manual_questions", [])
+    title = data.get("manual_title", "Qo'lda kiritilgan test")
+
+    if not questions:
+        await callback.answer("Kamida 1 ta savol kiritilishi kerak!", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    test_id = await db.add_test(title=title, author_id=user_id, questions=questions, time_limit_minutes=15)
+
+    img_count = sum(1 for q in questions if q.get("image_path") or q.get("image_bytes"))
+    img_info = f"\n🖼 <b>Rasmli savollar:</b> {img_count} ta" if img_count > 0 else ""
+
+    safe_title = html.escape(title)
+    bot_user = await callback.bot.get_me()
+    bot_username = bot_user.username
+    test_link = f"https://t.me/{bot_username}?start=test_{test_id}"
+    share_url = f"https://t.me/share/url?url={test_link}&text=" + urllib.parse.quote(f"'{title}' testini ishlash uchun havola:")
+
+    await callback.message.edit_text(
+        f"🎉 <b>Test muvaffaqiyatli saqlandi!</b>\n\n"
+        f"📌 <b>Test nomi:</b> {safe_title}\n"
+        f"🔢 <b>Savollar soni:</b> {len(questions)} ta{img_info}\n"
+        f"⏱ <b>Standart vaqt:</b> 15 daqiqa\n"
+        f"🆔 <b>Test ID:</b> #{test_id}\n\n"
+        f"🔗 <b>Talabalarga yuborish uchun havola:</b>\n"
+        f"<code>{test_link}</code>\n\n"
+        f"<i>💡 Maxfiylik: Ushbu test faqat siz havola yuborgan talabalarga ko'rinadi!</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📤 Guruhga ulashish (Share)", url=share_url)],
+            [InlineKeyboardButton(text="⏱ Vaqtni sozlash", callback_data=f"admin_time_{test_id}")],
+            [InlineKeyboardButton(text="📋 Mening testlarim", callback_data="admin_list_tests")],
+            [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="admin_menu" if is_admin(user_id) else "student_menu")]
+        ]),
+        parse_mode="HTML"
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data == "manual_cancel_test")
+async def cb_cancel_manual_test(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    user_id = callback.from_user.id
+    await callback.message.edit_text("❌ Test tuzish bekor qilindi.", parse_mode="HTML")
+    await callback.answer()
+
+
+# ==============================================================================
+# 🤖 AI TEST GENERATOR (GEMINI 2.5 FLASH)
+# ==============================================================================
+
+@router.callback_query(F.data == "create_test_ai")
+async def cb_create_test_ai(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    can_upload, _, _ = await db.can_teacher_create_test(user_id)
+    if not can_upload:
+        await callback.answer("Obuna talab qilinadi", show_alert=True)
+        return
+
+    gemini_key = await db.get_setting("gemini_api_key", "") or config.GEMINI_API_KEY
+    back_cb = "admin_upload_test" if is_admin(user_id) else "teacher_upload_test"
+
+    if not gemini_key:
+        text = (
+            "🤖 <b>AI Test Yaratuvchi (Google Gemini)</b>\n\n"
+            "⚠️ Ushbu funksiyadan foydalanish uchun <b>Gemini API kaliti</b> kiritilishi kerak!\n\n"
+            "Google AI Studio'dan mutlaqo bepul API kalit olishingiz mumkin:\n"
+            "1. <a href='https://aistudio.google.com/app/apikey'>aistudio.google.com</a> ga kiring;\n"
+            "2. 'Create API key' tugmasini bosing va kalitni nusxalang;\n"
+            "3. Botda <b>👑 Admin Paneli ➡️ ⚙️ Sozlamalar ➡️ 🔑 Gemini AI kalitini sozlash</b> tugmasi orqali kiriting.\n\n"
+            "<i>Kalit kiritilishi bilanoq AI test tuzish to'liq ishlaydi!</i>"
+        )
+        kb_rows = []
+        if is_admin(user_id):
+            kb_rows.append([InlineKeyboardButton(text="🔑 Kalitni kiritish", callback_data="set_gemini_key")])
+        kb_rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data=back_cb)])
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML", disable_web_page_preview=True)
+        await callback.answer()
+        return
+
+    await state.set_state(AITestState.waiting_for_material)
+    text = (
+        "🤖 <b>AI Test Yaratuvchi (Google Gemini 2.5)</b>\n\n"
+        "AI qanday material asosida test tuzsin? Quyidagilardan birini yuboring:\n\n"
+        "1️⃣ <b>Mavzu yoki matn:</b> Masalan: <i>'Amir Temur davlati mavzusida 5 ta qiyin test tuz'</i> yoki dars konspekti matni;\n"
+        "2️⃣ <b>Rasm (Foto):</b> Darslik sahifasi yoki konspekt daftari fotosuratini yuboring;\n"
+        "3️⃣ <b>Word (.docx):</b> Konspekt yoki kitob bo'limi faylini yuboring;\n"
+        "4️⃣ <b>PDF (.pdf):</b> Darslik yoki ma'ruza PDF faylini yuboring.\n\n"
+        "Materialni yuboring:"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data=back_cb)]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(AITestState.waiting_for_material, F.photo)
+@router.message(AITestState.waiting_for_material, F.document)
+@router.message(AITestState.waiting_for_material, F.text)
+async def process_ai_material(message: Message, state: FSMContext, bot: Bot):
+    material_type = "text"
+    media_bytes = None
+    prompt_text = ""
+
+    if message.photo:
+        photo = message.photo[-1]
+        file_io = io.BytesIO()
+        await bot.download(photo, destination=file_io)
+        media_bytes = file_io.getvalue()
+        material_type = "photo"
+        prompt_text = message.caption or ""
+    elif message.document:
+        doc = message.document
+        fname = (doc.file_name or "").lower()
+        if fname.endswith(".docx"):
+            material_type = "docx"
+        elif fname.endswith(".pdf"):
+            material_type = "pdf"
+        else:
+            await message.answer("❌ Iltimos, faqat Word (.docx) yoki PDF (.pdf) formatidagi fayl yuboring!")
+            return
+
+        file_io = io.BytesIO()
+        await bot.download(doc, destination=file_io)
+        media_bytes = file_io.getvalue()
+        prompt_text = message.caption or ""
+    elif message.text:
+        material_type = "text"
+        prompt_text = message.text
+
+    await state.update_data(
+        ai_material_type=material_type,
+        ai_media_bytes=media_bytes,
+        ai_prompt_text=prompt_text
+    )
+    await state.set_state(AITestState.waiting_for_count)
+
+    text = (
+        "🔢 <b>Testda nechta savol bo'lishini xohlaysiz?</b>\n\n"
+        "Quyidagi variantlardan birini tanlang yoki xohlagan soningizni yozib yuboring (masalan: <code>7</code>):"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="5 ta", callback_data="ai_count_5"),
+            InlineKeyboardButton(text="10 ta", callback_data="ai_count_10")
+        ],
+        [
+            InlineKeyboardButton(text="15 ta", callback_data="ai_count_15"),
+            InlineKeyboardButton(text="20 ta", callback_data="ai_count_20")
+        ],
+        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="ai_cancel")]
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("ai_count_"), AITestState.waiting_for_count)
+async def cb_ai_select_count(callback: CallbackQuery, state: FSMContext):
+    count = int(callback.data.split("_")[-1])
+    await run_ai_test_generation(callback.message, state, count, is_callback=True)
+    await callback.answer()
+
+
+@router.message(AITestState.waiting_for_count)
+async def process_ai_custom_count(message: Message, state: FSMContext):
+    val = message.text.strip()
+    if not val.isdigit() or int(val) < 1 or int(val) > 40:
+        await message.answer("⚠️ Iltimos, 1 dan 40 gacha bo'lgan son kiriting (masalan: 10):")
+        return
+    await run_ai_test_generation(message, state, int(val), is_callback=False)
+
+
+async def run_ai_test_generation(event: Message, state: FSMContext, count: int, is_callback: bool = False):
+    data = await state.get_data()
+    mat_type = data.get("ai_material_type", "text")
+    media_bytes = data.get("ai_media_bytes")
+    prompt_text = data.get("ai_prompt_text", "")
+
+    api_key = await db.get_setting("gemini_api_key", "") or config.GEMINI_API_KEY
+    if not api_key:
+        err_text = "❌ Gemini API kaliti topilmadi. Admin orqali sozlang."
+        if is_callback:
+            await event.edit_text(err_text)
+        else:
+            await event.answer(err_text)
+        await state.clear()
+        return
+
+    wait_text = (
+        f"⏳ <b>Google Gemini AI ma'lumotlarni tahlil qilib, {count} ta test tuzmoqda...</b>\n\n"
+        "<i>Iltimos kuting (10-25 soniya)...</i>"
+    )
+    if is_callback:
+        status_msg = await event.edit_text(wait_text, parse_mode="HTML")
+    else:
+        status_msg = await event.answer(wait_text, parse_mode="HTML")
+
+    try:
+        if mat_type == "photo":
+            result = await generate_test_from_image(media_bytes, "image/jpeg", api_key, count, prompt_text)
+        elif mat_type == "pdf":
+            result = await generate_test_from_pdf_file(media_bytes, api_key, count, prompt_text)
+        elif mat_type == "docx":
+            result = await generate_test_from_docx_file(media_bytes, api_key, count, prompt_text)
+        else:
+            result = await generate_test_from_content(prompt_text, api_key, count)
+
+        title = result["title"]
+        questions = result["questions"]
+
+        await state.update_data(ai_title=title, ai_questions=questions)
+        await state.set_state(AITestState.waiting_for_confirm)
+
+        sample_q = questions[0]
+        preview_text = (
+            f"🤖 <b>AI tomonidan test tayyorlandi!</b>\n\n"
+            f"📌 <b>Test nomi:</b> {html.escape(title)}\n"
+            f"🔢 <b>Savollar soni:</b> {len(questions)} ta\n\n"
+            f"<b>1-savol namunasi:</b>\n"
+            f"❓ <b>{html.escape(sample_q['question_text'])}</b>\n"
+            f"A) {html.escape(sample_q['option_a'])}\n"
+            f"B) {html.escape(sample_q['option_b'])}\n"
+            f"C) {html.escape(sample_q['option_c'])}\n"
+            f"D) {html.escape(sample_q['option_d'])}\n"
+            f"👉 To'g'ri javob: <b>{sample_q['correct_option']}</b>\n"
+            f"💡 Izoh: <i>{html.escape(sample_q['explanation'])}</i>\n\n"
+            f"<i>Ushbu testni saqlab, talabalar uchun havola yaratilsinmi?</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Saqlash va havola olish", callback_data="ai_confirm_save")],
+            [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="ai_cancel")]
+        ])
+        await status_msg.edit_text(preview_text, reply_markup=kb, parse_mode="HTML")
+
+    except AIGeneratorError as ge:
+        safe_err = html.escape(str(ge))
+        await status_msg.edit_text(
+            f"❌ <b>AI xatoligi:</b>\n\n{safe_err}\n\n"
+            "Iltimos, qayta urinib ko'ring yoki boshqa material yuboring.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="student_menu")]
+            ]),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        safe_err = html.escape(str(e))
+        await status_msg.edit_text(f"❌ Kutilmagan xatolik: {safe_err}", parse_mode="HTML")
+
+
+@router.callback_query(F.data == "ai_confirm_save", AITestState.waiting_for_confirm)
+async def cb_ai_confirm_save(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    title = data.get("ai_title", "AI Test")
+    questions = data.get("ai_questions", [])
+
+    if not questions:
+        await callback.answer("Savollar topilmadi!", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    test_id = await db.add_test(title=title, author_id=user_id, questions=questions, time_limit_minutes=15)
+
+    safe_title = html.escape(title)
+    bot_user = await callback.bot.get_me()
+    bot_username = bot_user.username
+    test_link = f"https://t.me/{bot_username}?start=test_{test_id}"
+    share_url = f"https://t.me/share/url?url={test_link}&text=" + urllib.parse.quote(f"'{title}' testini ishlash uchun havola:")
+
+    await callback.message.edit_text(
+        f"🎉 <b>AI Test muvaffaqiyatli saqlandi!</b>\n\n"
+        f"📌 <b>Test nomi:</b> {safe_title}\n"
+        f"🔢 <b>Savollar soni:</b> {len(questions)} ta\n"
+        f"⏱ <b>Standart vaqt:</b> 15 daqiqa\n"
+        f"🆔 <b>Test ID:</b> #{test_id}\n\n"
+        f"🔗 <b>Talabalarga yuborish uchun havola:</b>\n"
+        f"<code>{test_link}</code>\n\n"
+        f"<i>💡 Havolani talabalaringizga yuboring va ular testni to'g'ridan-to'g'ri topshirishlari mumkin!</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📤 Guruhga ulashish (Share)", url=share_url)],
+            [InlineKeyboardButton(text="⏱ Vaqtni sozlash", callback_data=f"admin_time_{test_id}")],
+            [InlineKeyboardButton(text="📋 Mening testlarim", callback_data="admin_list_tests")],
+            [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="admin_menu" if is_admin(user_id) else "student_menu")]
+        ]),
+        parse_mode="HTML"
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data == "ai_cancel")
+async def cb_ai_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ AI orqali test tuzish bekor qilindi.", parse_mode="HTML")
+    await callback.answer()
+
 
 
 @router.callback_query(F.data == "admin_list_tests")
@@ -658,19 +1147,24 @@ async def cb_admin_settings(event: Message | CallbackQuery, state: FSMContext):
     price_m = await db.get_setting("price_month", "30000")
     price_y = await db.get_setting("price_year", "250000")
     click_det = await db.get_setting("click_details", "8600 0000 0000 0000 (Click)")
+    gemini_key = await db.get_setting("gemini_api_key", "") or config.GEMINI_API_KEY
+    gemini_status = "✅ Ulangan" if gemini_key else "❌ Kiritilmagan"
+    gemini_preview = f"<code>{gemini_key[:6]}...{gemini_key[-4:]}</code>" if gemini_key else "<i>(yo'q)</i>"
 
     text = (
-        "⚙️ <b>Obuna va To'lov Sozlamalari (Superadmin):</b>\n\n"
+        "⚙️ <b>Obuna va Tizim Sozlamalari (Superadmin):</b>\n\n"
         f"💳 <b>1 oylik narx:</b> {price_m} so'm\n"
         f"💳 <b>1 yillik narx:</b> {price_y} so'm\n"
-        f"📲 <b>Click rekvizit:</b> <code>{click_det}</code>\n\n"
-        "O'zgartirish yoki qo'lda obuna berish uchun tanlang:"
+        f"📲 <b>Click rekvizit:</b> <code>{click_det}</code>\n"
+        f"🤖 <b>Gemini AI API:</b> {gemini_status} ({gemini_preview})\n\n"
+        "O'zgartirish yoki sozlash uchun tanlang:"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ 1 oylik narxni o'zgartirish", callback_data="set_price_month")],
         [InlineKeyboardButton(text="✏️ 1 yillik narxni o'zgartirish", callback_data="set_price_year")],
         [InlineKeyboardButton(text="✏️ Click kartani o'zgartirish", callback_data="set_click_card")],
+        [InlineKeyboardButton(text="🔑 Gemini AI kalitini sozlash", callback_data="set_gemini_key")],
         [InlineKeyboardButton(text="🎁 Qo'lda obuna berish (ID orqali)", callback_data="grant_sub_manual")],
         [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="admin_menu")]
     ])
@@ -768,6 +1262,42 @@ async def process_new_click_card(message: Message, state: FSMContext):
     await db.set_setting("click_details", card_info)
     await state.clear()
     await message.answer(f"✅ Click to'lov ma'lumotlari saqlandi:\n<code>{html.escape(card_info)}</code>", parse_mode="HTML")
+    await message.answer("Boshqaruv:", reply_markup=get_admin_reply_keyboard())
+
+
+@router.callback_query(F.data == "set_gemini_key")
+async def cb_set_gemini_key(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        return
+    await state.set_state(AdminState.waiting_for_gemini_key)
+    current_key = await db.get_setting("gemini_api_key", "") or config.GEMINI_API_KEY
+    key_preview = f"<code>{current_key[:8]}...{current_key[-4:]}</code>" if current_key else "Mavjud emas"
+
+    text = (
+        "🔑 <b>Google Gemini AI API Kalitini Sozlash</b>\n\n"
+        f"Hozirgi kalit: {key_preview}\n\n"
+        "Yangi API kalitni ushbu chatga xabar qilib yuboring:\n"
+        "(Google AI Studio: <a href='https://aistudio.google.com/app/apikey'>aistudio.google.com</a> dan mutlaqo bepul olinadi)"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="admin_settings")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+    await callback.answer()
+
+
+@router.message(AdminState.waiting_for_gemini_key)
+async def process_new_gemini_key(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    key = message.text.strip()
+    if len(key) < 15:
+        await message.answer("⚠️ API kalit juda qisqa ko'rinmoqda. Iltimos, Google AI Studio'dan olingan to'liq kalitni yuboring:")
+        return
+
+    await db.set_setting("gemini_api_key", key)
+    await state.clear()
+    await message.answer("✅ <b>Gemini AI API kaliti muvaffaqiyatli saqlandi!</b>\nEndi botda AI test yaratuvchi funksiyasi to'liq ishlaydi.", parse_mode="HTML")
     await message.answer("Boshqaruv:", reply_markup=get_admin_reply_keyboard())
 
 

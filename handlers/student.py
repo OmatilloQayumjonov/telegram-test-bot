@@ -526,19 +526,15 @@ async def cb_teacher_upload_test(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    from handlers.admin import AdminState
-    await state.set_state(AdminState.waiting_for_docx)
+    from keyboards import get_test_creation_keyboard
     await callback.message.edit_text(
-        "📥 <b>Word (.docx) formatdagi test faylini yuboring:</b>\n\n"
-        "• Har bir savol raqam bilan boshlanishi (1. ...)\n"
-        "• Variantlar A) B) C) D) ko'rinishida bo'lishi\n"
-        "• Har bir savol ostida to'g'ri javob ko'rsatilishi (masalan: <code>Javob: B</code> yoki <code>*B)</code>)\n"
-        "• Izoh ko'rsatilishi mumkin (<code>Izoh: ...</code>)\n\n"
-        "Faylni yuborishni kutyapman...",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📄 Namuna faylni olish", callback_data="admin_get_sample")],
-            [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="teacher_cabinet")]
-        ]),
+        "📥 <b>Yangi test yaratish usulini tanlang:</b>\n\n"
+        "1️⃣ <b>Word (.docx) fayl</b> — Tayyor Word test hujjatini yuklash\n"
+        "2️⃣ <b>PDF (.pdf) fayl</b> — PDF formatidagi test faylini yuklash (rasmlari bilan)\n"
+        "3️⃣ <b>✍️ Botda qo'lda kiritish</b> — Savol matni yoki rasmini bittalab botga yuborish\n"
+        "4️⃣ <b>🤖 AI Test Yaratuvchi</b> — Darslik matni, fotosurat, Word yoki PDF konspekt asosida AI ga test tuzdirish\n\n"
+        "Qaysi usuldan foydalanasiz?",
+        reply_markup=get_test_creation_keyboard("teacher_cabinet"),
         parse_mode="HTML"
     )
     await callback.answer()
