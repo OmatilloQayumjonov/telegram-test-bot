@@ -103,7 +103,10 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     if not user:
         full_name = message.from_user.full_name or "Foydalanuvchi"
         await db.save_or_update_user(user_id, full_name, message.from_user.username)
-        user = {"full_name": full_name, "user_id": user_id}
+        user = {"full_name": full_name, "user_id": user_id, "username": message.from_user.username}
+    elif message.from_user.username and user.get("username") != message.from_user.username:
+        await db.save_or_update_user(user_id, user.get("full_name"), message.from_user.username)
+        user["username"] = message.from_user.username
 
     # Maxsus havola orqali kelinganmi? (Masalan: /start test_5)
     args = command.args
@@ -1357,12 +1360,10 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     st_username = user.get("username") if user else None
     if st_username:
-        profile_url = f"https://t.me/{st_username}"
-        profile_mention = f'<a href="{profile_url}">{safe_name}</a>'
+        profile_mention = f'<a href="https://t.me/{st_username}">{safe_name}</a>'
         username_str = f"@{st_username}"
     else:
-        profile_url = f"tg://user?id={chat_id}"
-        profile_mention = f'<a href="{profile_url}">{safe_name}</a>'
+        profile_mention = f'<a href="tg://user?id={chat_id}">{safe_name}</a>'
         username_str = "<i>(yo'q)</i>"
 
     admin_notification = (
@@ -1374,7 +1375,7 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
         f"🎯 <b>Natija:</b> {score} / {total} ta ({percent}%)\n"
         f"🎖 <b>Baho:</b> {grade}\n"
         f"⏱ <b>Vaqti:</b> {now_str}\n\n"
-        f"<i>💡 Talabaning Telegram profiliga kirish va unga xabar yozish uchun quyidagi 'Talaba profiliga kirish' tugmasini bosing:</i>"
+        f"<i>💡 Talabaning Telegram profiliga kirish uchun uning ismi ustiga bosing!</i>"
     )
 
     recipients = set(ADMIN_IDS)
@@ -1382,12 +1383,10 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
         recipients.add(author_id)
 
     test_id = data.get("test_id")
-    notif_rows = [
-        [InlineKeyboardButton(text=f"💬 {safe_name} profiliga kirish (Telegram)", url=profile_url)]
-    ]
+    notif_rows = []
     if test_id:
         notif_rows.append([InlineKeyboardButton(text="📊 Ushbu test hisoboti (Reyting & Excel)", callback_data=f"test_report_{test_id}")])
-    notif_kb = InlineKeyboardMarkup(inline_keyboard=notif_rows)
+    notif_kb = InlineKeyboardMarkup(inline_keyboard=notif_rows) if notif_rows else None
 
     for rec_id in recipients:
         try:

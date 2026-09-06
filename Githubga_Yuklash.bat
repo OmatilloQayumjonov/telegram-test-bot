@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "AI tezligi oshirildi, talaba ismini o'zgartirganda o'qituvchi panelida darhol yangilanishi va profilga o'tish tugmalari qo'shildi"
+git commit -m "Natijalar va bildirishnomalarda talaba ismi bosilganda to'g'ridan-to'g'ri Telegram profiliga kiradigan qilindi"
 git push origin main
 
 echo.

@@ -1047,7 +1047,6 @@ async def cb_single_test_report(callback: CallbackQuery):
 
     kb_nav = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 Havolani guruhga ulashish (Share)", url=share_url)],
-        [InlineKeyboardButton(text="👥 Talabalarning Telegram profillari (Chat)", callback_data=f"test_students_{test_id}")],
         [InlineKeyboardButton(text="🔄 Natijalarni yangilash", callback_data=f"test_report_{test_id}")],
         [InlineKeyboardButton(text="🔙 Boshqa testlar hisoboti", callback_data="admin_export_excel")]
     ])
@@ -1118,7 +1117,7 @@ async def cb_single_test_report(callback: CallbackQuery):
         f"<code>{test_link}</code>\n\n"
         f"🏆 <b>TALABALAR REYTINGI (NATIJALAR):</b>\n"
         + "\n".join(leaderboard_lines) + "\n\n"
-        f"<i>💡 Talaba ismi ustiga bosib yoki quyidagi 'Talabalar profillari' tugmasi orqali ularning Telegramiga to'g'ridan-to'g'ri o'tishingiz mumkin.</i>\n\n"
+        f"<i>💡 Talabaning Telegram profiliga kirish va unga shaxsiy xabar yozish uchun ro'yxatdagi uning ismi ustiga bosing!</i>\n\n"
     )
 
     if len(results) > 20:
@@ -1154,33 +1153,10 @@ async def cb_single_test_report(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("test_students_"))
 async def cb_test_students_profiles(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    test_id = int(callback.data.replace("test_students_", ""))
-    test, results = await db.get_test_results_summary(test_id, author_id=user_id)
-    if not test or not results:
-        await callback.answer("Hozircha natijalar mavjud emas!", show_alert=True)
-        return
-
-    safe_title = html.escape(test["title"])
-    text = (
-        f"👥 <b>«{safe_title}» testini topshirgan talabalar ro'yxati:</b>\n\n"
-        f"<i>Istalgan talabaning Telegram profiliga kirish va unga shaxsiy xabar yozish uchun quyidagi tugmalardan birini bosing:</i>"
+    await callback.answer(
+        "💡 Talabaning Telegram profiliga kirish uchun hisobotdagi uning ismi ustiga bosing!",
+        show_alert=True
     )
-
-    kb_rows = []
-    for idx, r in enumerate(results[:25], start=1):
-        st_name = r.get("full_name", "Talaba")
-        st_uname = r.get("username")
-        st_uid = r.get("user_id")
-        url = f"https://t.me/{st_uname}" if st_uname else f"tg://user?id={st_uid}"
-        uname_tag = f" (@{st_uname})" if st_uname else ""
-        btn_text = f"💬 {idx}. {st_name[:18]}{uname_tag}"
-        kb_rows.append([InlineKeyboardButton(text=btn_text, url=url)])
-
-    kb_rows.append([InlineKeyboardButton(text="🔙 Test hisobotiga qaytish", callback_data=f"test_report_{test_id}")])
-
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML")
-    await callback.answer()
 
 
 @router.callback_query(F.data == "export_all_excel")
