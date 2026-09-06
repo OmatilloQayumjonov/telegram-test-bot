@@ -338,32 +338,44 @@ async def msg_available_tests(message: Message, state: FSMContext):
     await show_main_menu(message, name, message.from_user.id)
 
 
-@router.message(StateFilter("*"), F.text == "🔗 Test havolalari")
-async def msg_test_links(message: Message, state: FSMContext, bot: Bot):
-    await state.clear()
-    user_id = message.from_user.id
-    tests = await db.get_tests_by_author(user_id)
+async def render_test_links_page(event: Message, user_id: int, bot: Bot, page: int = 1, is_callback: bool = False):
+    is_adm = user_id in ADMIN_IDS or len(ADMIN_IDS) == 0
+    if is_adm:
+        tests = await db.get_student_accessible_tests(user_id)
+    else:
+        tests = await db.get_tests_by_author(user_id)
 
     if not tests:
-        await message.answer(
+        empty_text = (
             "📋 <b>Sizda hozircha yaratilgan testlar mavjud emas.</b>\n\n"
-            "Yangi test yuklash uchun quyidagi <b>👨‍🏫 O'qituvchi bo'limi</b> ➡️ <b>📥 Yangi test yuklash</b> tugmasini bosing.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📥 Yangi test yuklash (.docx)", callback_data="teacher_upload_test")]
-            ]),
-            parse_mode="HTML"
+            "Yangi test yuklash uchun quyidagi <b>👨‍🏫 O'qituvchi bo'limi</b> ➡️ <b>📥 Yangi test yuklash</b> tugmasini bosing."
         )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📥 Yangi test yuklash (.docx)", callback_data="teacher_upload_test")],
+            [InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="student_menu")]
+        ])
+        if is_callback:
+            await event.edit_text(empty_text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await event.answer(empty_text, reply_markup=kb, parse_mode="HTML")
         return
+
+    PAGE_SIZE = 5
+    total_pages = max(1, (len(tests) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * PAGE_SIZE
+    page_tests = tests[start_idx:start_idx + PAGE_SIZE]
 
     bot_user = await bot.get_me()
     bot_username = bot_user.username
 
-    text = "🔗 <b>Siz yaratgan testlar va ularning talabalar uchun maxsus havolalari:</b>\n\n"
+    text = f"🔗 <b>Siz yaratgan testlar va havolalari</b> ({page}/{total_pages}-sahifa, jami {len(tests)} ta):\n\n"
     kb_rows = []
 
-    for idx, t in enumerate(tests, start=1):
+    for idx, t in enumerate(page_tests, start=start_idx + 1):
         t_id = t["id"]
-        safe_title = html.escape(t["title"])
+        safe_title = html.escape(str(t["title"]))
         test_link = f"https://t.me/{bot_username}?start=test_{t_id}"
         share_url = f"https://t.me/share/url?url={test_link}&text=" + urllib.parse.quote(f"'{t['title']}' testini ishlash uchun havola:")
 
@@ -376,18 +388,47 @@ async def msg_test_links(message: Message, state: FSMContext, bot: Bot):
             InlineKeyboardButton(text=f"📤 {idx}-testni ulashish (Share)", url=share_url)
         ])
         kb_rows.append([
-            InlineKeyboardButton(text=f"📊 {idx}-test natijalari va Excel", callback_data=f"test_report_{t_id}"),
-            InlineKeyboardButton(text=f"⚙️ Sozlamalar", callback_data=f"admin_test_{t_id}")
+            InlineKeyboardButton(text=f"📊 {idx}-test natijalari", callback_data=f"test_report_{t_id}"),
+            InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data=f"admin_test_{t_id}")
         ])
+
+    # Sahifalash tugmalari
+    if total_pages > 1:
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"test_links_page_{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"test_links_page_{page + 1}"))
+        kb_rows.append(nav_row)
+
+    kb_rows.append([InlineKeyboardButton(text="🔙 Bosh menyu", callback_data="student_menu")])
 
     text += "<i>💡 Havolani nusxalab talabalaringizga yuboring yoki 'Ulashish' tugmasi orqali to'g'ridan-to'g'ri Telegram guruhiga tashlang!</i>"
 
-    await message.answer(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+    if is_callback:
+        await event.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await event.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows), parse_mode="HTML", disable_web_page_preview=True)
+
+
+@router.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("test_links_page_"))
+async def cb_test_links_page(callback: CallbackQuery, bot: Bot):
+    page = int(callback.data.split("_")[-1])
+    await render_test_links_page(callback.message, callback.from_user.id, bot, page=page, is_callback=True)
+    await callback.answer()
+
+
+@router.message(StateFilter("*"), F.text == "🔗 Test havolalari")
+async def msg_test_links(message: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    await render_test_links_page(message, message.from_user.id, bot, page=1, is_callback=False)
+
 
 
 @router.message(StateFilter("*"), Command("teacher"))
@@ -511,23 +552,30 @@ async def show_main_menu(message: Message, full_name: str, user_id: int):
 
     kb_rows = []
     if tests:
-        tests_intro = "📋 <b>Sizning faol testlaringiz va havolalari:</b>\n\n"
-        for idx, t in enumerate(tests, start=1):
+        tests_intro = "📋 <b>Sizning faol testlaringiz:</b>\n\n"
+        # Eng so'nggi 6 ta testni ko'rsatamiz (Telegram xabar hajmi chegarasidan oshmasligi uchun)
+        visible_tests = tests[:6]
+        for idx, t in enumerate(visible_tests, start=1):
             t_limit = t.get("time_limit_minutes", 15) or 15
             time_tag = f"{t_limit} daq" if t_limit > 0 else "Cheklovsiz"
-            btn_text = f"📝 {t['title']} ({t['question_count']} ta, {time_tag})"
+            safe_title = html.escape(str(t['title']))
+            btn_title = html.escape(str(t['title'])[:26])
+            btn_text = f"📝 {btn_title} ({t['question_count']} ta)"
             kb_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"start_test_{t['id']}")])
 
             test_link = f"https://t.me/{bot_username}?start=test_{t['id']}"
             if t.get("author_id") == user_id or is_adm:
                 tests_intro += (
-                    f"📌 <b>{idx}. {t['title']}</b> ({t['question_count']} ta savol)\n"
+                    f"📌 <b>{idx}. {safe_title}</b> ({t['question_count']} ta savol)\n"
                     f"🔗 <b>Talabalarga havola:</b> <code>{test_link}</code>\n\n"
                 )
             else:
-                tests_intro += f"📌 <b>{idx}. {t['title']}</b> ({t['question_count']} ta savol, {time_tag})\n\n"
+                tests_intro += f"📌 <b>{idx}. {safe_title}</b> ({t['question_count']} ta savol, {time_tag})\n\n"
 
-        tests_intro += "<i>💡 Test ustiga bosib uni boshqarishingiz yoki havolani nusxalab talabalarga yuborishingiz mumkin.</i>"
+        if len(tests) > 6:
+            tests_intro += f"<i>💡 Jami {len(tests)} ta test mavjud. Qolganlarini ko'rish uchun quyidagi tugmadan foydalaning.</i>"
+        else:
+            tests_intro += "<i>💡 Test ustiga bosib uni ishlashingiz yoki havolani nusxalab talabalarga yuborishingiz mumkin.</i>"
     else:
         tests_intro = (
             "ℹ️ <b>Sizda hozircha biriktirilgan testlar yo'q.</b>\n\n"
@@ -535,15 +583,22 @@ async def show_main_menu(message: Message, full_name: str, user_id: int):
             "• Test topshirish uchun: O'qituvchingiz yuborgan <b>maxsus havola</b> orqali kiring."
         )
 
+    if tests and len(tests) > 6:
+        kb_rows.append([InlineKeyboardButton(text=f"📋 Barcha testlar ro'yxati ({len(tests)} ta)", callback_data="teacher_all_links")])
+
     kb_rows.append([InlineKeyboardButton(text="📊 Excel hisobotlar va Reyting", callback_data="admin_export_excel")])
-    kb_rows.append([InlineKeyboardButton(text="🔗 Barcha testlarim havolalari", callback_data="teacher_all_links")])
+    kb_rows.append([InlineKeyboardButton(text="🔗 Test havolalari", callback_data="teacher_all_links")])
     kb_rows.append([InlineKeyboardButton(text="👨‍🏫 O'qituvchi bo'limi (Test yaratish)", callback_data="teacher_cabinet")])
     kb_rows.append([InlineKeyboardButton(text="✏️ Ism-familiyani o'zgartirish", callback_data="edit_my_name")])
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
+    msg_body = f"👤 Profil: <b>{safe_name}</b>\n\n{tests_intro}"
+    if len(msg_body) > 4000:
+        msg_body = msg_body[:3900] + "\n\n<i>...va boshqa testlar</i>"
+
     await message.answer(
-        f"👤 Profil: <b>{safe_name}</b>\n\n{tests_intro}",
+        msg_body,
         reply_markup=reply_kb,
         parse_mode="HTML",
         disable_web_page_preview=True
@@ -597,56 +652,10 @@ async def cb_teacher_cabinet(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "teacher_all_links")
-async def cb_teacher_all_links(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    tests = await db.get_tests_by_author(user_id)
-
-    if not tests:
-        await callback.message.edit_text(
-            "📋 Hozirda siz yaratgan testlar mavjud emas.\n\n"
-            "Yangi test yuklaganingizdan so'ng, uning talabalar uchun maxsus havolasi shu yerda chiqadi.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📥 Yangi test yuklash", callback_data="teacher_upload_test")],
-                [InlineKeyboardButton(text="🔙 Orqaga", callback_data="teacher_cabinet")]
-            ]),
-            parse_mode="HTML"
-        )
-        await callback.answer()
-        return
-
-    bot_user = await callback.bot.get_me()
-    bot_username = bot_user.username
-
-    text = "🔗 <b>Sizning barcha testlaringiz uchun maxsus havolalar:</b>\n\n"
-    kb_rows = []
-
-    for idx, t in enumerate(tests, start=1):
-        t_id = t["id"]
-        safe_title = html.escape(t["title"])
-        test_link = f"https://t.me/{bot_username}?start=test_{t_id}"
-        share_url = f"https://t.me/share/url?url={test_link}&text=" + urllib.parse.quote(f"'{t['title']}' testini ishlash uchun havola:")
-
-        text += (
-            f"📌 <b>{idx}. {safe_title}</b> ({t['question_count']} ta savol)\n"
-            f"🔗 Havola: <code>{test_link}</code>\n\n"
-        )
-        kb_rows.append([
-            InlineKeyboardButton(text=f"📤 {idx}-testni ulashish (Share)", url=share_url)
-        ])
-        kb_rows.append([
-            InlineKeyboardButton(text=f"📊 {idx}-test natijalari va Excel", callback_data=f"test_report_{t_id}"),
-            InlineKeyboardButton(text=f"⚙️ Sozlamalar", callback_data=f"admin_test_{t_id}")
-        ])
-
-    kb_rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="teacher_cabinet")])
-
-    await callback.message.edit_text(
-        text + "<i>💡 Talabalarga yuborish uchun havola ustiga bosib nusxalang yoki 'Ulashish' tugmasi orqali to'g'ridan-to'g'ri guruhga yuboring.</i>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+async def cb_teacher_all_links(callback: CallbackQuery, bot: Bot):
+    await render_test_links_page(callback.message, callback.from_user.id, bot, page=1, is_callback=True)
     await callback.answer()
+
 
 
 @router.callback_query(F.data == "teacher_upload_test")
