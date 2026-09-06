@@ -3,7 +3,7 @@ import json
 import re
 import aiohttp
 import asyncio
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from services.docx_parser import parse_docx_test
 from services.pdf_parser import parse_pdf_test
 
