@@ -69,7 +69,7 @@ async def run_verification():
 
     # Test topshirish va batch javoblar
     db_questions = await db.get_test_questions(test_id)
-    attempt_id = await db.create_attempt(user_id=dummy_student_id, test_id=test_id, total=len(db_questions))
+    attempt_id = await db.create_attempt(user_id=dummy_student_id, test_id=test_id, total=len(db_questions), student_name="Toshmatov Sherzodbek")
 
     # Javoblar lug'ati
     answers = {}
@@ -89,6 +89,9 @@ async def run_verification():
     # Excel eksport tekshiruvi
     print("\n4. Excel eksport tekshiruvi...")
     results = await db.get_all_test_results(test_id=test_id)
+    assert len(results) > 0
+    assert results[0]["full_name"] == "Toshmatov Sherzodbek"
+    print(f"   [OK] Talaba ism-familiyasi natijalarda to'g'ri qaytdi: {results[0]['full_name']}")
     excel_path = export_results_to_excel(results, "data/test_natijalari_test.xlsx")
     assert os.path.exists(excel_path), "Excel fayli yaratilmadi!"
     print(f"   [OK] Excel fayl muvaffaqiyatli saqlandi: {excel_path}")

@@ -11,7 +11,7 @@ echo.
 cd /d "%~dp0"
 
 git add -A
-git commit -m "Qo'lda test tuzish, PDF testlarni qabul qilish va AI Test Yaratuvchi tizimlari to'liq qo'shildi"
+git commit -m "Gemini 3.6-flash/3.7-flash integratsiyasi, rasmli savollarni kiritish va talaba ism-familiyasini natijalarda ko'rsatish to'liq yangilandi"
 git push origin main
 
 echo.

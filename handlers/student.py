@@ -114,13 +114,12 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             if test and test.get("is_active") == 1:
                 # Talabaga ushbu testga kirish ruxsatini berish
                 await db.grant_student_access_to_test(user_id, target_test_id)
+                safe_test_title = html.escape(test['title'])
 
-                # Agar talabaning ismi to'liq bo'lmasa yoki "Foydalanuvchi" bo'lsa
-                name_parts = user["full_name"].strip().split()
-                if len(name_parts) < 2 or user["full_name"] == "Foydalanuvchi":
+                name_parts = (user.get("full_name") or "").strip().split()
+                if len(name_parts) < 2 or user.get("full_name") in ["Foydalanuvchi", "Talaba"]:
                     await state.set_state(StudentRegistrationState.waiting_for_name)
                     await state.update_data(pending_test_id=target_test_id)
-                    safe_test_title = html.escape(test['title'])
                     await message.answer(
                         f"👋 Assalomu alaykum!\n\n"
                         f"Siz <b>«{safe_test_title}»</b> testiga kirdingiz.\n\n"
@@ -130,7 +129,22 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
                     )
                     return
                 else:
-                    await show_test_welcome(message, test, user_id)
+                    await state.set_state(StudentRegistrationState.waiting_for_name)
+                    await state.update_data(pending_test_id=target_test_id)
+                    safe_name = html.escape(user["full_name"])
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=f"✅ {safe_name} sifatida davom etish", callback_data=f"confirm_student_name_{target_test_id}")],
+                        [InlineKeyboardButton(text="✏️ Boshqa ism-familiya kiritish", callback_data=f"reenter_student_name_{target_test_id}")]
+                    ])
+                    await message.answer(
+                        f"👋 Assalomu alaykum!\n\n"
+                        f"Siz <b>«{safe_test_title}»</b> testiga kirdingiz.\n\n"
+                        f"Test natijasi o'qituvchiga quyidagi ism bilan qayd etiladi:\n"
+                        f"👤 <b>Ism va familiya:</b> <b>{safe_name}</b>\n\n"
+                        f"<i>(Agar boshqa ism-familiya bilan topshirmoqchi bo'lsangiz, yangi ismingizni yozib yuboring yoki quyidagi tugmani tanlang):</i>",
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
                     return
             else:
                 await message.answer(
@@ -141,6 +155,43 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             pass
 
     await show_main_menu(message, user["full_name"], user_id)
+
+
+@router.callback_query(F.data.startswith("confirm_student_name_"))
+async def cb_confirm_student_name(callback: CallbackQuery, state: FSMContext):
+    test_id = int(callback.data.replace("confirm_student_name_", ""))
+    await state.clear()
+    test = await db.get_test_by_id(test_id)
+    if test and test.get("is_active") == 1:
+        await callback.message.delete()
+        await show_test_welcome(callback.message, test, callback.from_user.id)
+    else:
+        await callback.message.edit_text("⚠️ Test topilmadi yoki to'xtatilgan.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("reenter_student_name_"))
+async def cb_reenter_student_name(callback: CallbackQuery, state: FSMContext):
+    test_id = int(callback.data.replace("reenter_student_name_", ""))
+    await state.set_state(StudentRegistrationState.waiting_for_name)
+    await state.update_data(pending_test_id=test_id)
+    await callback.message.edit_text(
+        "✏️ Iltimos, haqiqiy <b>ism va familiyangizni</b> kiriting:\n"
+        "<i>(Masalan: Karimov Jasur)</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "edit_my_name")
+async def cb_edit_my_name(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(StudentRegistrationState.waiting_for_name)
+    await callback.message.edit_text(
+        "✏️ Iltimos, yangi <b>ism va familiyangizni</b> kiriting:\n"
+        "<i>(Masalan: Karimov Jasur)</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @router.message(StudentRegistrationState.waiting_for_name)
@@ -770,6 +821,21 @@ async def cb_launch_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
     test_id = int(callback.data.replace("launch_test_", ""))
     user_id = callback.from_user.id
 
+    user = await db.get_user(user_id)
+    name_parts = (user.get("full_name") if user else "").strip().split()
+    if not user or len(name_parts) < 2 or user.get("full_name") in ["Foydalanuvchi", "Talaba"]:
+        await state.set_state(StudentRegistrationState.waiting_for_name)
+        await state.update_data(pending_test_id=test_id)
+        await callback.message.answer(
+            "⚠️ Testni boshlashdan oldin, iltimos, <b>ism va familiyangizni</b> to'liq kiriting:\n"
+            "<i>(Masalan: Karimov Jasur)</i>",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    student_name = user.get("full_name", "").strip()
+
     questions = await db.get_test_questions(test_id)
     test = await db.get_test_by_id(test_id)
 
@@ -814,7 +880,7 @@ async def cb_launch_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if is_random == 1:
         random.shuffle(processed_questions)
 
-    attempt_id = await db.create_attempt(user_id=user_id, test_id=test_id, total=len(processed_questions))
+    attempt_id = await db.create_attempt(user_id=user_id, test_id=test_id, total=len(processed_questions), student_name=student_name)
 
     time_limit_minutes = test.get("time_limit_minutes", 15) or 15
     start_ts = time.time()
@@ -826,6 +892,7 @@ async def cb_launch_test(callback: CallbackQuery, state: FSMContext, bot: Bot):
         test_title=test["title"],
         author_id=test.get("author_id", 0),
         attempt_id=attempt_id,
+        student_name=student_name,
         questions=processed_questions,
         current_index=0,
         total=len(processed_questions),
@@ -1239,7 +1306,7 @@ async def auto_finish_test(chat_id: int, state: FSMContext, bot: Bot, reason: st
     grade = get_grade(percent)
 
     user = await db.get_user(chat_id)
-    full_name = user["full_name"] if user else "Talaba"
+    full_name = data.get("student_name") or (user["full_name"] if user else "Talaba")
     username_str = f"@{user['username']}" if (user and user.get("username")) else "yo'q"
 
     time_up_header = "⌛️ <b>VAQT TUGADI!</b>\n\n" if reason == "time_up" else ""

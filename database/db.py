@@ -106,12 +106,18 @@ async def init_db():
                 test_id INTEGER NOT NULL,
                 score INTEGER DEFAULT 0,
                 total INTEGER NOT NULL,
+                student_name TEXT,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE,
                 FOREIGN KEY (test_id) REFERENCES tests (id) ON DELETE CASCADE
             )
         """)
+
+        try:
+            await db.execute("ALTER TABLE attempts ADD COLUMN student_name TEXT")
+        except Exception:
+            pass
 
         # Berilgan javoblar
         await db.execute("""
@@ -530,11 +536,11 @@ async def get_test_questions(test_id: int):
 
 
 # Test urinishlari (Attempts)
-async def create_attempt(user_id: int, test_id: int, total: int) -> int:
+async def create_attempt(user_id: int, test_id: int, total: int, student_name: str = None) -> int:
     async with get_db() as db:
         cursor = await db.execute(
-            "INSERT INTO attempts (user_id, test_id, total, score) VALUES (?, ?, ?, 0)",
-            (user_id, test_id, total)
+            "INSERT INTO attempts (user_id, test_id, total, score, student_name) VALUES (?, ?, ?, 0, ?)",
+            (user_id, test_id, total, student_name)
         )
         attempt_id = cursor.lastrowid
         await db.commit()
@@ -578,7 +584,7 @@ async def save_attempt_final_answers(attempt_id: int, questions: list, answers_d
 async def finish_attempt(attempt_id: int):
     async with get_db() as db:
         cursor = await db.execute("""
-            SELECT a.*, u.full_name, u.username, t.title as test_title, t.author_id
+            SELECT a.*, COALESCE(a.student_name, u.full_name) as full_name, u.username, t.title as test_title, t.author_id
             FROM attempts a
             JOIN users u ON a.user_id = u.user_id
             JOIN tests t ON a.test_id = t.id
@@ -616,7 +622,7 @@ async def get_attempt_mistakes(attempt_id: int):
 async def get_all_test_results(test_id: int = None, author_id: int = None):
     async with get_db() as db:
         query = """
-            SELECT a.id, u.user_id, u.full_name, u.username, t.title as test_title,
+            SELECT a.id, u.user_id, COALESCE(a.student_name, u.full_name) as full_name, u.username, t.title as test_title,
                    a.score, a.total, a.started_at, a.completed_at
             FROM attempts a
             JOIN users u ON a.user_id = u.user_id
@@ -691,7 +697,7 @@ async def get_test_results_summary(test_id: int, author_id: int = None):
             return None, []
 
         cursor = await db.execute("""
-            SELECT a.id, u.user_id, u.full_name, u.username, t.title as test_title,
+            SELECT a.id, u.user_id, COALESCE(a.student_name, u.full_name) as full_name, u.username, t.title as test_title,
                    a.score, a.total, a.started_at, a.completed_at
             FROM attempts a
             JOIN users u ON a.user_id = u.user_id

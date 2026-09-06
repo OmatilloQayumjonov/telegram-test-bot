@@ -11,7 +11,14 @@ class AIGeneratorError(Exception):
     pass
 
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+MODELS_TO_TRY = [
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash"
+]
 
 SYSTEM_INSTRUCTION = (
     "Siz professional test tuzuvchi va pedagogik ekspert yordamchisiz. "
@@ -38,46 +45,54 @@ async def _call_gemini_api(payload: dict, api_key: str) -> dict:
             "Iltimos, administratorga murojaat qiling yoki Admin Panelidagi sozlamalardan API kalitni kiriting."
         )
 
-    url = f"{GEMINI_API_URL}?key={api_key}"
+    last_error = ""
     timeout = aiohttp.ClientTimeout(total=90)
 
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload) as resp:
-                status = resp.status
-                data = await resp.json()
+    for model_name in MODELS_TO_TRY:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload) as resp:
+                    status = resp.status
+                    data = await resp.json()
 
-                if status != 200:
-                    err_msg = "Noma'lum xatolik"
-                    if isinstance(data, dict) and "error" in data:
-                        err_msg = data["error"].get("message", str(data["error"]))
-                    if "API key not valid" in err_msg or status == 400 and "API_KEY_INVALID" in err_msg:
-                        raise AIGeneratorError("Kiritilgan Gemini API kaliti yaroqsiz! Iltimos, kalitni tekshiring.")
-                    elif "Resource has been exhausted" in err_msg or status == 429:
-                        raise AIGeneratorError("Gemini API so'rovlar limiti tugadi. Birozdan so'ng qayta urinib ko'ring.")
-                    else:
-                        raise AIGeneratorError(f"Gemini API xatoligi ({status}): {err_msg}")
+                    if status == 404:
+                        last_error = f"{model_name} topilmadi yoki eskirgan"
+                        continue
 
-                # Natijani ajratib olish
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    raise AIGeneratorError("Gemini javob qaytarmadi (bo'sh javob).")
+                    if status != 200:
+                        err_msg = "Noma'lum xatolik"
+                        if isinstance(data, dict) and "error" in data:
+                            err_msg = data["error"].get("message", str(data["error"]))
+                        if "API key not valid" in err_msg or status == 400 and "API_KEY_INVALID" in err_msg:
+                            raise AIGeneratorError("Kiritilgan Gemini API kaliti yaroqsiz! Iltimos, kalitni tekshiring.")
+                        elif "Resource has been exhausted" in err_msg or status == 429:
+                            raise AIGeneratorError("Gemini API so'rovlar limiti tugadi. Birozdan so'ng qayta urinib ko'ring.")
+                        else:
+                            raise AIGeneratorError(f"Gemini API xatoligi ({status}): {err_msg}")
 
-                content_parts = candidates[0].get("content", {}).get("parts", [])
-                if not content_parts:
-                    raise AIGeneratorError("Gemini javobida matn topilmadi.")
+                    # Natijani ajratib olish
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        raise AIGeneratorError("Gemini javob qaytarmadi (bo'sh javob).")
 
-                raw_json = content_parts[0].get("text", "")
-                cleaned = _clean_json_text(raw_json)
+                    content_parts = candidates[0].get("content", {}).get("parts", [])
+                    if not content_parts:
+                        raise AIGeneratorError("Gemini javobida matn topilmadi.")
 
-                try:
-                    parsed = json.loads(cleaned)
-                    return parsed
-                except json.JSONDecodeError as je:
-                    raise AIGeneratorError(f"AI javobini JSON formatida o'qib bo'lmadi: {str(je)}")
+                    raw_json = content_parts[0].get("text", "")
+                    cleaned = _clean_json_text(raw_json)
 
-    except aiohttp.ClientError as ce:
-        raise AIGeneratorError(f"Internet aloqasi yoki tarmoq xatoligi: {str(ce)}")
+                    try:
+                        parsed = json.loads(cleaned)
+                        return parsed
+                    except json.JSONDecodeError as je:
+                        raise AIGeneratorError(f"AI javobini JSON formatida o'qib bo'lmadi: {str(je)}")
+
+        except aiohttp.ClientError as ce:
+            raise AIGeneratorError(f"Internet aloqasi yoki tarmoq xatoligi: {str(ce)}")
+
+    raise AIGeneratorError(f"Gemini API modeli bilan bog'lanib bo'lmadi: {last_error}")
 
 
 def _validate_ai_test(data: dict) -> dict:

@@ -333,10 +333,11 @@ async def process_manual_test_title(message: Message, state: FSMContext):
     text = (
         f"📝 <b>Test nomi:</b> {safe_title}\n"
         f"🔢 <b>Kiritilgan savollar:</b> 0 ta\n\n"
-        "<b>Savolni quyidagi shakllardan birida yuboring:</b>\n"
+        "<b>Savolni quyidagi usullardan birida yuborishingiz mumkin:</b>\n\n"
         "1️⃣ <b>Matnli savol:</b> Savol matni, variantlar va to'g'ri javobni bitta xabarda yozing;\n"
-        "2️⃣ <b>Rasmli savol:</b> Rasm (foto) yuboring va uning izohiga (caption) savol hamda variantlarni yozing!\n\n"
-        "<i>💡 Namuna:\n"
+        "2️⃣ <b>Rasmli savol:</b> Avval rasmni (foto) yuboring, so'ng unga tegishli savol matnini yuboring (yoki rasmni izohi bilan yuboring)!\n\n"
+        "<i>💡 Eslatma: Rasmda savol yozilgan bo'lishi shart emas. Rasm shunchaki sxema, formula yoki tasvir bo'ladi, savol esa rasm bilan bog'liq bo'lib uning tagida beriladi.</i>\n\n"
+        "<i>Namuna:\n"
         "O'zbekiston poytaxti qaysi shahar?\n"
         "A) Samarqand\n"
         "B) Buxoro\n"
@@ -344,7 +345,7 @@ async def process_manual_test_title(message: Message, state: FSMContext):
         "D) Xiva\n"
         "Javob: C\n"
         "Izoh: 1930-yildan buyon poytaxt.</i>\n\n"
-        "Savolni yuboring:"
+        "Savol yoki rasmni yuboring:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="manual_cancel_test")]
@@ -355,17 +356,52 @@ async def process_manual_test_title(message: Message, state: FSMContext):
 @router.message(ManualTestState.waiting_for_question, F.photo)
 @router.message(ManualTestState.waiting_for_question, F.text)
 async def process_manual_question(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    pending_img_bytes = data.get("pending_photo_bytes")
+
     img_bytes = None
     raw_text = ""
 
-    if message.photo:
+    # 1. Agar foydalanuvchi faqat rasmni (izohsiz) yuborgan bo'lsa:
+    if message.photo and not message.caption:
         photo = message.photo[-1]
         file_io = io.BytesIO()
         await bot.download(photo, destination=file_io)
         img_bytes = file_io.getvalue()
-        raw_text = message.caption or ""
+        await state.update_data(pending_photo_bytes=img_bytes)
+
+        text = (
+            "🖼 <b>Savol rasmi muvaffaqiyatli qabul qilindi!</b>\n\n"
+            "<i>(Eslatma: Rasmda savol yozilgan bo'lishi shart emas, savol rasm tagida joylashadi).</i>\n\n"
+            "Endi ushbu rasm bilan bog'liq <b>savol matni, variantlari (A, B, C, D) va to'g'ri javobini</b> yuboring:\n\n"
+            "<i>💡 Namuna:\n"
+            "Rasmda tasvirlangan shaklning yuzini toping:\n"
+            "A) 12 sm²\n"
+            "B) 16 sm²\n"
+            "C) 20 sm²\n"
+            "D) 24 sm²\n"
+            "Javob: B\n"
+            "Izoh: Kvadrat yuzi tomoni kvadratiga teng.</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="manual_cancel_test")]
+        ])
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        return
+
+    # 2. Agar rasm bilan birga izoh yuborilgan bo'lsa:
+    if message.photo and message.caption:
+        photo = message.photo[-1]
+        file_io = io.BytesIO()
+        await bot.download(photo, destination=file_io)
+        img_bytes = file_io.getvalue()
+        raw_text = message.caption
+
+    # 3. Agar faqat matn yuborilgan bo'lsa:
     elif message.text:
         raw_text = message.text
+        # Agar avvalroq rasm yuborilgan bo'lsa, uni ushbu savolga biriktiramiz
+        img_bytes = pending_img_bytes
 
     try:
         parsed_q = parse_single_question_text(raw_text, image_bytes=img_bytes)
@@ -378,13 +414,13 @@ async def process_manual_question(message: Message, state: FSMContext, bot: Bot)
         )
         return
 
-    data = await state.get_data()
     questions = data.get("manual_questions", [])
     questions.append(parsed_q)
-    await state.update_data(manual_questions=questions)
+    # Savol muvaffaqiyatli saqlandi, kutayotgan rasmni tozalaymiz
+    await state.update_data(manual_questions=questions, pending_photo_bytes=None)
 
     q_count = len(questions)
-    img_tag = "🖼 Rasm: Bor ✅\n" if img_bytes else ""
+    img_tag = "🖼 Rasm: Biriktirildi ✅\n" if img_bytes else ""
     safe_q_preview = html.escape(parsed_q['question_text'][:70])
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -397,7 +433,7 @@ async def process_manual_question(message: Message, state: FSMContext, bot: Bot)
         f"❓ {safe_q_preview}...\n"
         f"{img_tag}"
         f"👉 To'g'ri javob: <b>{parsed_q['correct_option']}</b>\n\n"
-        f"<i>Keyingi savolni yuboring yoki quyidagi tugma orqali testni yakunlang:</i>",
+        f"<i>Keyingi savolni (yoki rasmni) yuborishingiz, yoxud testni saqlashingiz mumkin:</i>",
         reply_markup=kb,
         parse_mode="HTML"
     )
