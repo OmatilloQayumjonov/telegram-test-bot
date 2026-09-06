@@ -182,12 +182,15 @@ async def save_or_update_user(user_id: int, full_name: str, username: str = None
                 full_name = excluded.full_name,
                 username = excluded.username
         """, (user_id, full_name, username))
+        if full_name and full_name != "Foydalanuvchi":
+            await db.execute("UPDATE attempts SET student_name = ? WHERE user_id = ?", (full_name, user_id))
         await db.commit()
 
 
 async def update_user_name(user_id: int, new_full_name: str):
     async with get_db() as db:
         await db.execute("UPDATE users SET full_name = ? WHERE user_id = ?", (new_full_name, user_id))
+        await db.execute("UPDATE attempts SET student_name = ? WHERE user_id = ?", (new_full_name, user_id))
         await db.commit()
 
 
@@ -584,7 +587,7 @@ async def save_attempt_final_answers(attempt_id: int, questions: list, answers_d
 async def finish_attempt(attempt_id: int):
     async with get_db() as db:
         cursor = await db.execute("""
-            SELECT a.*, COALESCE(a.student_name, u.full_name) as full_name, u.username, t.title as test_title, t.author_id
+            SELECT a.*, COALESCE(u.full_name, a.student_name) as full_name, u.username, t.title as test_title, t.author_id
             FROM attempts a
             JOIN users u ON a.user_id = u.user_id
             JOIN tests t ON a.test_id = t.id
@@ -622,7 +625,7 @@ async def get_attempt_mistakes(attempt_id: int):
 async def get_all_test_results(test_id: int = None, author_id: int = None):
     async with get_db() as db:
         query = """
-            SELECT a.id, u.user_id, COALESCE(a.student_name, u.full_name) as full_name, u.username, t.title as test_title,
+            SELECT a.id, u.user_id, COALESCE(u.full_name, a.student_name) as full_name, u.username, t.title as test_title,
                    a.score, a.total, a.started_at, a.completed_at
             FROM attempts a
             JOIN users u ON a.user_id = u.user_id
@@ -697,7 +700,7 @@ async def get_test_results_summary(test_id: int, author_id: int = None):
             return None, []
 
         cursor = await db.execute("""
-            SELECT a.id, u.user_id, COALESCE(a.student_name, u.full_name) as full_name, u.username, t.title as test_title,
+            SELECT a.id, u.user_id, COALESCE(u.full_name, a.student_name) as full_name, u.username, t.title as test_title,
                    a.score, a.total, a.started_at, a.completed_at
             FROM attempts a
             JOIN users u ON a.user_id = u.user_id

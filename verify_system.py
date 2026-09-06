@@ -92,7 +92,16 @@ async def run_verification():
     assert len(results) > 0
     assert results[0]["full_name"] == "Toshmatov Sherzodbek"
     print(f"   [OK] Talaba ism-familiyasi natijalarda to'g'ri qaytdi: {results[0]['full_name']}")
-    excel_path = export_results_to_excel(results, "data/test_natijalari_test.xlsx")
+
+    # Talaba ismini o'zgartirganda o'qituvchi panelida ham yangilanishini tekshirish
+    await db.update_user_name(dummy_student_id, "Toshmatov Sherzodjon")
+    results_after = await db.get_all_test_results(test_id=test_id)
+    assert results_after[0]["full_name"] == "Toshmatov Sherzodjon"
+    _, summary_attempts = await db.get_test_results_summary(test_id)
+    assert summary_attempts[0]["full_name"] == "Toshmatov Sherzodjon"
+    print(f"   [OK] Talaba ismini o'zgartirgach, o'qituvchi panelida ham darhol yangilandi: {results_after[0]['full_name']}")
+
+    excel_path = export_results_to_excel(results_after, "data/test_natijalari_test.xlsx")
     assert os.path.exists(excel_path), "Excel fayli yaratilmadi!"
     print(f"   [OK] Excel fayl muvaffaqiyatli saqlandi: {excel_path}")
 

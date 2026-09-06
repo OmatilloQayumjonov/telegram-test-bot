@@ -86,7 +86,7 @@ def export_results_to_excel(results: list, test_title: str = None, output_filena
             medal = "🥇 " if i == 1 else "🥈 " if i == 2 else "🥉 " if i == 3 else ""
             student_name = r.get("full_name") or "Noma'lum"
             full_name = f"{medal}{student_name}"
-            username = f"@{r['username']}" if r.get("username") else "-"
+            username = f"@{r['username']}" if r.get("username") else f"ID: {r.get('user_id', '-')}"
 
             row_data = [
                 i,
@@ -116,6 +116,15 @@ def export_results_to_excel(results: list, test_title: str = None, output_filena
                     cell.alignment = center_align
                 else:
                     cell.alignment = left_align
+
+                # Telegram profiliga bosiladigan havola
+                if col_num == 3:
+                    if r.get("username"):
+                        cell.hyperlink = f"https://t.me/{r['username']}"
+                        cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
+                    elif r.get("user_id"):
+                        cell.hyperlink = f"tg://user?id={r['user_id']}"
+                        cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
 
             ws.row_dimensions[row_idx].height = 20
             row_idx += 1
@@ -157,7 +166,7 @@ def export_results_to_excel(results: list, test_title: str = None, output_filena
             else:
                 grade = "Qoniqarsiz (2)"
 
-            username = f"@{r['username']}" if r.get("username") else "-"
+            username = f"@{r['username']}" if r.get("username") else f"ID: {r.get('user_id', '-')}"
 
             row_data = [
                 i,
@@ -180,6 +189,15 @@ def export_results_to_excel(results: list, test_title: str = None, output_filena
                 else:
                     cell.alignment = left_align
                 cell.font = Font(name="Calibri", size=10)
+
+                # Telegram profiliga bosiladigan havola
+                if col_num == 3:
+                    if r.get("username"):
+                        cell.hyperlink = f"https://t.me/{r['username']}"
+                        cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
+                    elif r.get("user_id"):
+                        cell.hyperlink = f"tg://user?id={r['user_id']}"
+                        cell.font = Font(name="Calibri", size=10, color="0000FF", underline="single")
 
             row_idx += 1
 
